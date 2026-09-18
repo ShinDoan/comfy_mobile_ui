@@ -1,0 +1,166 @@
+# ComfyUI Mobile UI
+
+ComfyUI를 **모바일에서 편하게 쓰기 위한 웹 UI**입니다. Python(Flask) 백엔드가 같은 컴퓨터에서 돌아가는 ComfyUI에 요청을 대신 넣어주고, 모바일 브라우저에서는 터치에 최적화된 화면으로 프롬프트/LoRA/해상도 등을 설정해서 생성할 수 있습니다.
+
+Anima(UNET 로더 기반) / Illustrious(체크포인트 기반) 두 계열을 지원하며, 텍스트 태그 자동완성, 태그 알약(pill) 편집, 영역별 프롬프트, 워크플로우 저장/불러오기 등 [AUTOMATIC1111 WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui) 스타일의 편의 기능을 ComfyUI API 위에 얹은 프로젝트입니다.
+
+> ⚠️ 이 프로젝트는 ComfyUI를 **대체**하지 않습니다. 반드시 ComfyUI가 같은 컴퓨터에서 먼저 실행되어 있어야 합니다.
+
+---
+
+## 목차
+
+- [준비물](#준비물)
+- [설치 및 실행](#설치-및-실행)
+- [처음 켰을 때 해야 할 설정](#처음-켰을-때-해야-할-설정)
+- [기능 소개](#기능-소개)
+- [폴더 구조](#폴더-구조)
+- [API 요약](#api-요약)
+- [알려진 한계](#알려진-한계)
+- [모바일 접속이 안 될 때 체크리스트](#모바일-접속이-안-될-때-체크리스트)
+
+---
+
+## 준비물
+
+- **ComfyUI**가 같은 컴퓨터에서 실행 중이어야 합니다 (`http://127.0.0.1:8188`, `app.py` 상단의 `COMFY_URL`에서 변경 가능).
+- **Python 3.9 이상**
+- Anima(UNET) 계열과 Illustrious(체크포인트) 계열 모델이 ComfyUI에서 정상적으로 인식되고 있어야 합니다. `extra_model_paths.yaml`로 모델 경로를 잡아둔 상태를 권장합니다.
+
+## 설치 및 실행
+
+### Windows (가장 간단한 방법)
+
+1. 이 폴더를 원하는 위치에 압축 해제합니다.
+2. `run.bat`을 더블클릭합니다.
+   - Python이 없다면 [python.org](https://www.python.org/downloads/)에서 설치하고, 설치 중 **"Add Python to PATH"**를 꼭 체크하세요.
+   - 최초 실행 시 가상환경 생성과 패키지 설치가 자동으로 진행됩니다.
+3. 콘솔에 접속 주소가 표시됩니다.
+
+   ```
+   이 컴퓨터에서 접속:   http://127.0.0.1:7860
+   모바일에서 접속:      http://192.168.x.x:7860
+   ```
+
+4. **모바일 기기를 이 컴퓨터와 같은 와이파이(같은 공유기)에 연결한 상태**에서, 모바일 브라우저에 위 `http://192.168.x.x:7860` 주소를 입력합니다.
+
+### macOS / Linux (수동 설치)
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
+
+## 처음 켰을 때 해야 할 설정
+
+1. **모델 경로 설정** — 상단 초기화 버튼 왼쪽의 **⚙ 경로 설정**을 눌러서 다음 중 하나로 설정합니다.
+   - 갖고 계신 `extra_model_paths.yaml` 파일을 그대로 업로드
+   - 또는 Anima/Illustrious 각각의 `base_path`만 텍스트로 직접 입력 (하위 폴더 구조는 ComfyUI 표준값을 자동으로 사용)
+   - 이 경로는 CivitAI 정보 조회(해시 계산)를 위해 실제 파일을 찾는 데 쓰입니다.
+2. **LoRA/체크포인트 필터** — 파일이 너무 많다면 라벨 옆 톱니바퀴에서 이름에 포함될 키워드(기본값: Anima=`ANIMA`, IL=`IL`)를 설정해 목록을 줄일 수 있습니다.
+
+---
+
+## 기능 소개
+
+### 기본 생성
+
+- **Anima / Illustrious 계열 전환** — 체크포인트(또는 UNET) / CLIP / VAE 선택, LoRA 여러 개 추가(모델 강도·CLIP 강도 개별 슬라이더, 숫자 직접 입력 가능)
+- 검색 가능한 드롭다운(체크포인트/LoRA는 대분류 → 하위 경로 순으로 드릴다운) + 각 모델 우측 ⓘ 버튼으로 **CivitAI 정보**(예시 이미지, 트리거 워드, 예시 프롬프트) 조회
+
+### 프롬프트
+
+- **텍스트 모드 / 태그(알약) 모드**를 하나의 버튼으로 전환 — 긍정·부정 프롬프트, 영역별 프롬프트까지 전부 동시에 전환됩니다.
+- 태그 모드에서: 롱프레스 드래그로 순서 변경, 가중치 슬라이더(+숫자 직접 입력, 범위를 벗어나는 값도 가능), 가중치에 따라 알약 테두리 색이 실시간으로 변함, 줄바꿈 삽입/삭제
+- `(태그)`처럼 괄호만 있는 표기는 `(태그:1.1)`과 동일하게 인식하고, 반대로 가중치 1.1은 다시 `(태그)` 축약형으로 저장됩니다. 가중치 표시는 불필요한 소수 둘째 자리를 자동으로 생략합니다 (`1.20` → `1.2`).
+- **태그 검색**: 한글 번역/영문/동의어 기준 자동완성 (danbooru 태그 약 3.7만 개)
+- **영역별 프롬프트**: 생성될 이미지 위에 사각형 영역을 직접 그려서(드래그로 그리기·이동·8방향 리사이즈, 최소 64×64, 8의 배수 스냅) 영역마다 별도 긍정 프롬프트 + 강도를 지정할 수 있습니다. 부정 프롬프트는 메인과 공유하거나 영역별로 따로 지정 가능. 내부적으로 ComfyUI의 `ConditioningSetArea` + `ConditioningCombine`으로 구현됩니다.
+
+### 해상도 / 배치
+
+- 너비·높이는 항상 8의 배수로 스냅(직접 입력도 자동 보정), 스피너도 8단위로 증가
+- 너비·높이 사이 ⇄ 버튼으로 가로/세로 전환
+- **해상도 프리셋**: 자주 쓰는 해상도를 이름 붙여 저장·검색·삭제, 현재 비율(예: `16:9`, `3:4`)을 자동 계산해 표시하고 직접 비율을 입력해도 재계산됨
+- 해상도를 줄이면 이미 그려둔 영역별 프롬프트 영역도 새 캔버스 안으로 자동으로 맞춰 들어옵니다.
+
+### 샘플러 / Hires
+
+- 스텝, CFG, 샘플러, 스케줄러, 시드(무작위 생성 + 이전 시드로 되돌리기)
+- **Hires 업스케일**: 업스케일 방식·배율·스텝·디노이즈, 필요 시 샘플러/스케줄러/CFG를 base와 다르게 개별 지정하는 고급 옵션
+- 생성 중에는 base 단계 이미지가 완성되는 즉시 미리보기로 보여주고, hires 진행률이 올라갈수록 블러가 서서히 사라지는 연출 (기본은 꺼져 있으며 코드 내 플래그로 켤 수 있습니다)
+
+### 워크플로우 저장 / 불러오기
+
+- 긍정 프롬프트 라벨 옆에서 현재 설정(체크포인트·LoRA·해상도·프롬프트·영역 등) 전체를 이름 붙여 서버에 저장
+- 저장된 목록은 **계열별로 필터링**되어 보이며, 이름 검색·삭제(확인 후 삭제)·전체 초기화·상세보기(긍정/부정 프롬프트만 미리보기) 지원
+- 불러오기는 세 가지 경로를 지원합니다.
+  1. 서버에 저장해둔 목록에서 선택
+  2. 외부 `workflow.json`(ComfyUI API 포맷) 파일 업로드
+  3. **ComfyUI로 생성된 이미지**를 그대로 업로드 — PNG에 내장된 메타데이터(`prompt`)를 직접 파싱해서 설정을 추출합니다
+- 불러온 워크플로우가 이 앱이 이해할 수 있는 구조가 아니면(예: 전혀 다른 도구로 만든 그래프) 하단에 토스트로 안내하고 자동 취소되며, 계열이 다르면 전환 여부를 먼저 물어봅니다.
+- "전체 불러오기" 또는 "프롬프트만 불러오기" 중 선택 가능합니다.
+
+### 생성 결과
+
+- 생성 중 진행률 표시(전체 진행률 + 현재 스텝), 배치 여러 장 생성 시 완료 개수 점으로 표시
+- 생성된 이미지는 히스토리에 계속 쌓이고, 이전 이미지 설정을 그대로 불러와 재사용하는 버튼 제공
+- hires 사용 시 base ↔ hires 결과 전환 보기
+- 라이트/다크 모드 자동 대응
+
+---
+
+## 폴더 구조
+
+```
+comfyui_mobile_ui/
+├─ app.py                     # Flask 서버 (ComfyUI 프록시, 워크플로우 그래프 생성 등)
+├─ requirements.txt
+├─ run.bat                    # Windows용 설치+실행 스크립트
+├─ templates/
+│  └─ base.html
+├─ static/
+│  ├─ css/style.css
+│  └─ js/base.js
+└─ data/                      # 실행 중 생성되는 로컬 데이터 (git에는 커밋하지 않는 것을 권장)
+   ├─ tags.json                  # danbooru 태그 자동완성 데이터셋
+   ├─ device_states.json         # 기기별 마지막 설정 기억
+   ├─ filter_settings.json       # LoRA/체크포인트 이름 필터
+   ├─ model_paths_config.json    # extra_model_paths.yaml에서 뽑은 실제 경로
+   ├─ model_info_cache.json      # CivitAI 조회 캐시
+   ├─ resolution_presets.json
+   ├─ workflows/                 # 저장된 워크플로우
+   └─ generated_images/          # 생성된 이미지 파일 + index.json
+```
+
+## API 요약
+
+Flask 백엔드가 제공하는 주요 엔드포인트입니다 (전부 `app.py`에 정의).
+
+| 분류 | 엔드포인트 |
+|---|---|
+| 생성 | `POST /api/generate`, `GET /api/generate/<job_id>`, `GET /api/generate/<job_id>/preview`, `POST /api/generate/<job_id>/stop` |
+| 모델 목록 | `GET /api/models`, `GET /api/samplers`, `GET /api/upscale-models`, `GET /api/hires-options`, `GET /api/model-info` |
+| 모델 경로 | `GET/POST /api/model-paths`, `POST /api/model-paths/upload`, `POST /api/model-paths/set-base-paths`, `POST /api/model-paths/reset` |
+| 필터 | `GET/POST /api/filter-settings/<kind>` |
+| 워크플로우 | `GET/POST/DELETE /api/workflows`, `GET/DELETE /api/workflows/<id>`, `POST /api/workflows/parse` |
+| 해상도 프리셋 | `GET/POST /api/resolution-presets`, `DELETE /api/resolution-presets/<id>` |
+| 생성 이미지 | `GET /api/generated-images`, `DELETE /api/generated-images/<id>`, `POST /api/generated-images/clear` |
+| 태그 자동완성 | `GET /api/tags/autocomplete` |
+| 기기 상태 | `GET/POST /api/state` |
+| 기타 | `POST /api/upscale`, `POST /api/reset` |
+
+## 알려진 한계
+
+- **img2img / 인페인팅은 아직 없습니다.** 여러 차례 시도했으나 마스크 좌표 계산 관련 버그가 반복되어 이번 버전에서는 제외했습니다. 다시 시도하실 경우 ComfyUI의 마스크가 **이미지 알파 채널 기반**(`mask = 1 - alpha`)이라는 점과, `VAEEncodeForInpaint`가 마스크 영역을 인코딩 전에 회색으로 지워버려 부분 디노이즈와 궁합이 나쁘다는 점(대신 `VAEEncode + SetLatentNoiseMask` 사용 권장)을 참고하시면 좋습니다.
+- **ControlNet은 미구현**입니다. Canny는 서버에서 직접(OpenCV) 처리 가능하지만, 포즈/깊이 등은 신경망 기반 전처리가 필요해 별도 결정이 필요합니다.
+- 이 서버는 **ComfyUI를 직접 실행/재시작할 수 없습니다.** 이미 켜져 있는 ComfyUI에 요청만 보내는 구조라, 커스텀 노드를 새로 설치했다면 ComfyUI를 직접 재시작해야 인식됩니다.
+- 데스크톱(PC 웹) 전용 레이아웃은 기획 단계이며 아직 반응형으로 구현되지 않았습니다.
+
+## 모바일 접속이 안 될 때 체크리스트
+
+- 모바일과 PC가 정말 같은 와이파이(같은 공유기)에 연결되어 있는지 확인
+- Windows 방화벽이 Python/Flask의 네트워크 접근을 막고 있을 수 있습니다. 방화벽 알림이 뜨면 "허용"을 눌러주세요. 이미 차단된 경우 `제어판 → Windows Defender 방화벽 → 앱 허용`에서 `python.exe`를 허용해주세요.
+- 회사/카페 와이파이처럼 기기 간 통신이 차단된 네트워크에서는 접속이 안 될 수 있습니다.
+- ComfyUI가 `http://127.0.0.1:8188`에서 실행 중인지 확인하세요 (주소가 다르면 `app.py`의 `COMFY_URL`을 수정).

@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>기본 생성 - ComfyUI Mobile UI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+</head>
+<body>
+
+  <div class="page">
+
+    <div class="section">
+      <div class="label-row" style="margin-bottom:10px;">
+        <p class="section-title" style="margin:0;">기본 생성</p>
+        <div style="display:flex; gap:14px; align-items:center;">
+          <button id="modelPathsSettingsToggle" type="button" style="border:none; background:none; color: var(--text-secondary); font-size:12px; padding:2px 0; display:flex; align-items:center; gap:4px;">
+            <i class="ti ti-settings" aria-hidden="true" style="font-size:14px;"></i>경로 설정
+          </button>
+          <button id="resetBtn" type="button" style="border:none; background:none; color: var(--text-danger); font-size:12px; padding:2px 0; display:flex; align-items:center; gap:4px;">
+            <i class="ti ti-refresh" aria-hidden="true" style="font-size:14px;"></i>초기화
+          </button>
+        </div>
+      </div>
+      <div id="resetConfirm" style="display:none; margin-bottom:10px; padding:10px 12px; background: var(--bg-danger); border-radius: var(--radius); font-size:12px; color: var(--text-danger); align-items:center; justify-content:space-between; gap:8px;">
+        <span>저장된 모든 설정과 생성 이미지가 삭제됩니다.</span>
+        <div style="display:flex; gap:6px; flex-shrink:0;">
+          <button id="resetCancel" type="button" style="border:none; background:none; color: var(--text-secondary); font-size:12px;">취소</button>
+          <button id="resetConfirmBtn" type="button" style="border:none; background: var(--fill-danger); color: var(--on-danger); font-size:12px; padding:4px 10px; border-radius: var(--radius);">초기화</button>
+        </div>
+      </div>
+      <div class="family-toggle" id="familyToggle">
+        <button class="fam-btn active" data-fam="anima" type="button">Anima</button>
+        <button class="fam-btn" data-fam="il" type="button">Illustrious</button>
+      </div>
+    </div>
+
+    <div id="modelPathsSection" class="section" style="display:none;">
+      <div class="label-row" style="margin-bottom:6px;">
+        <label class="label" style="margin:0;">모델 경로 설정</label>
+        <button id="modelPathsResetBtn" type="button" class="tag-search-btn" style="display:none; color:var(--text-danger);">기본값으로</button>
+      </div>
+      <p id="modelPathsStatus" style="font-size:11px; color:var(--text-muted); margin:0 0 10px;"></p>
+
+      <button id="modelPathsUploadBtn" type="button" style="width:100%; border:0.5px solid var(--border); background:var(--surface-2); color:var(--text-primary); border-radius:var(--radius); padding:9px 0; font-size:13px; display:flex; align-items:center; justify-content:center; gap:6px;">
+        <i class="ti ti-upload" aria-hidden="true" style="font-size:15px;"></i>extra_model_paths.yaml 업로드
+      </button>
+      <input type="file" id="modelPathsFileInput" accept=".yaml,.yml" style="display:none;">
+
+      <p style="font-size:11px; color:var(--text-muted); margin:12px 0 4px;">파일 업로드가 어려운 환경(모바일 등)이라면, 필요한 계열의 base_path만 입력하셔도 됩니다 (하위 폴더 구조는 ComfyUI 표준값을 그대로 사용합니다).</p>
+      <label class="label" style="margin:0 0 2px;">Anima 경로</label>
+      <input type="text" id="modelPathsAnimaInput" placeholder="D:/AI_Gen/Anima/" style="width:100%; font-family:monospace; font-size:12px; margin-top:0;">
+      <label class="label" style="margin:10px 0 2px;">IL 경로</label>
+      <input type="text" id="modelPathsIlInput" placeholder="D:/AI_Gen/IL/" style="width:100%; font-family:monospace; font-size:12px; margin-top:0;">
+      <button id="modelPathsBaseApplyBtn" type="button" style="width:100%; margin-top:8px; border:none; background:var(--fill-primary); color:var(--on-primary); border-radius:var(--radius); padding:9px 0; font-size:13px;">입력한 경로 적용</button>
+    </div>
+
+    <div class="section">
+      <label class="label" id="ckptLabel" style="display:flex; align-items:baseline; gap:6px; flex-wrap:wrap;">
+        <span id="ckptLabelText">UNET 모델</span>
+        <button id="ckptFilterGearBtn" type="button" aria-label="필터링 키워드 설정" style="border:none; background:none; color:var(--text-secondary); font-size:12px; padding:0; display:inline-flex; align-items:center; margin-left:2px;">
+          <i class="ti ti-settings" aria-hidden="true"></i>
+        </button>
+        <span id="ckptFilterDisplay" style="font-size:11px; color:var(--text-muted);"></span>
+      </label>
+      <div id="ckptFilterPanel" style="display:none; margin-bottom:8px; background:var(--surface-1); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px;">
+        <p style="font-size:12px; color:var(--text-secondary); margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 시작해야 목록에 표시됩니다. 콤마로 여러 개 입력 가능)</p>
+        <input type="text" id="ckptFilterInput" placeholder="예: ANIMA, ANI-V2" style="width:100%; margin-top:0;">
+        <p id="ckptFilterDefaultHint" style="font-size:11px; color:var(--text-muted); margin:6px 0 0;"></p>
+        <button id="ckptFilterDisableBtn" type="button" style="width:100%; margin-top:8px; border:0.5px dashed var(--border-strong); background:none; color:var(--text-secondary); padding:7px 0; border-radius:var(--radius); font-size:12px;">필터링 사용 안함 (전체 표시)</button>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <button id="ckptFilterApplyBtn" type="button" style="flex:1; border:none; background:var(--fill-primary); color:var(--on-primary); padding:8px 0; border-radius:var(--radius); font-size:13px;">적용</button>
+          <button id="ckptFilterApplyBothBtn" type="button" style="flex:1; border:0.5px solid var(--border-accent); background:none; color:var(--text-accent); padding:8px 0; border-radius:var(--radius); font-size:13px;">일괄 적용</button>
+          <button id="ckptFilterCancelBtn" type="button" style="flex:1; border:0.5px solid var(--border); background:none; color:var(--text-secondary); padding:8px 0; border-radius:var(--radius); font-size:13px;">취소</button>
+        </div>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <div class="searchable-select" style="flex:1;">
+          <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+          <input type="hidden" id="ckptSelect">
+          <div class="searchable-dropdown"></div>
+        </div>
+        <button id="ckptInfoBtn" type="button" aria-label="모델 정보 보기" class="model-info-btn">
+          <i class="ti ti-info-circle" aria-hidden="true"></i>
+        </button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div id="animaClipRow" style="margin-bottom:10px;">
+        <label class="label">CLIP 모델</label>
+        <div class="searchable-select">
+          <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+          <input type="hidden" id="clipSelect">
+          <div class="searchable-dropdown"></div>
+        </div>
+      </div>
+      <div>
+        <label class="label" id="vaeLabel">VAE</label>
+        <div class="searchable-select">
+          <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+          <input type="hidden" id="vaeSelect">
+          <div class="searchable-dropdown"></div>
+        </div>
+      </div>
+      <div id="clipSkipSection">
+        <div class="label-row" style="margin-top:10px; margin-bottom:0;">
+          <button type="button" id="clipSkipToggle" class="lora-text-btn" style="font-size:12px; padding:2px 0;">CLIP 스킵</button>
+        </div>
+        <div id="clipSkipRow" style="display:none; margin-top:6px;">
+          <label class="label">CLIP 스킵 레이어 (음수 입력 가능)</label>
+          <input type="number" id="clipSkipInput" step="1" placeholder="예: -2">
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="label-row">
+        <label class="label" style="display:flex; align-items:baseline; gap:6px; flex-wrap:wrap;">
+          LoRA<span class="lora-header-hint"> · 드래그로 순서 변경</span>
+          <button id="loraFilterGearBtn" type="button" aria-label="필터링 키워드 설정" style="border:none; background:none; color:var(--text-secondary); font-size:12px; padding:0; display:inline-flex; align-items:center; margin-left:2px;">
+            <i class="ti ti-settings" aria-hidden="true"></i>
+          </button>
+          <span id="loraFilterDisplay" style="font-size:11px; color:var(--text-muted);"></span>
+        </label>
+        <button id="addLora" class="lora-text-btn" type="button" style="font-size:13px; color: var(--text-accent);">+ 추가</button>
+      </div>
+      <div id="loraFilterPanel" style="display:none; margin-bottom:8px; background:var(--surface-1); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px;">
+        <p style="font-size:12px; color:var(--text-secondary); margin:0 0 6px;">필터링 키워드 (LoRA 경로 텍스트가 이 단어로 시작해야 목록에 표시됩니다. 콤마로 여러 개 입력 가능)</p>
+        <input type="text" id="loraFilterInput" placeholder="예: ANIMA, ANI-V2" style="width:100%; margin-top:0;">
+        <p id="loraFilterDefaultHint" style="font-size:11px; color:var(--text-muted); margin:6px 0 0;"></p>
+        <button id="loraFilterDisableBtn" type="button" style="width:100%; margin-top:8px; border:0.5px dashed var(--border-strong); background:none; color:var(--text-secondary); padding:7px 0; border-radius:var(--radius); font-size:12px;">필터링 사용 안함 (전체 표시)</button>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <button id="loraFilterApplyBtn" type="button" style="flex:1; border:none; background:var(--fill-primary); color:var(--on-primary); padding:8px 0; border-radius:var(--radius); font-size:13px;">적용</button>
+          <button id="loraFilterApplyBothBtn" type="button" style="flex:1; border:0.5px solid var(--border-accent); background:none; color:var(--text-accent); padding:8px 0; border-radius:var(--radius); font-size:13px;">일괄 적용</button>
+          <button id="loraFilterCancelBtn" type="button" style="flex:1; border:0.5px solid var(--border); background:none; color:var(--text-secondary); padding:8px 0; border-radius:var(--radius); font-size:13px;">취소</button>
+        </div>
+      </div>
+      <div id="loraList"></div>
+    </div>
+
+    <div class="section" style="display:flex; flex-direction:column; gap:14px;">
+      <div>
+        <div class="label-row" style="margin-bottom:0;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <label id="positivePromptLabel" class="label" style="margin:0; cursor:pointer; display:flex; align-items:center; gap:4px;">
+              긍정 프롬프트 <i class="ti ti-chevron-down" id="positiveChevron" aria-hidden="true" style="font-size:13px;"></i>
+            </label>
+            <button id="workflowLoadBtn" type="button" class="tag-search-btn">불러오기</button>
+            <button id="workflowSaveBtn" type="button" class="tag-search-btn" style="color:var(--fill-brand);">저장</button>
+          </div>
+          <div style="display:flex; gap:10px;">
+            <button id="promptModeToggleBtn" type="button" class="tag-search-btn" style="color:var(--text-secondary);">모드 전환</button>
+            <button id="openTagSearchBtn" type="button" class="tag-search-btn">태그 검색</button>
+          </div>
+        </div>
+        <div id="positivePromptSection" style="margin-top:6px;">
+          <div class="prompt-wrap">
+            <textarea id="positivePrompt" rows="3" placeholder="1girl, standing, outdoors, ..."></textarea>
+            <div id="positivePromptAc" class="inline-ac-dropdown"></div>
+          </div>
+          <div id="positivePillBox" class="prompt-pill-box" style="display:none;"></div>
+        </div>
+      </div>
+      <div>
+        <label id="negativePromptLabel" class="label" style="cursor:pointer; display:flex; align-items:center; gap:4px;">
+          부정 프롬프트 <i class="ti ti-chevron-down" id="negativeChevron" aria-hidden="true" style="font-size:13px;"></i>
+        </label>
+        <div id="negativePromptSection" style="margin-top:6px;">
+          <div class="prompt-wrap">
+            <textarea id="negativePrompt" rows="2" placeholder="worst quality, bad anatomy, ..."></textarea>
+            <div id="negativePromptAc" class="inline-ac-dropdown"></div>
+          </div>
+          <div id="negativePillBox" class="prompt-pill-box" style="display:none;"></div>
+        </div>
+      </div>
+      <div>
+        <button type="button" id="sharedPreviewToggle" class="prompt-preview-toggle" style="padding-top:0;">ComfyUI로 전송될 실제 문자열</button>
+        <div id="sharedPreviewWrap" style="display:none; flex-direction:column; gap:6px; margin-top:4px;">
+          <div>
+            <p style="font-size:11px; color:var(--text-muted); margin:0 0 2px;">긍정</p>
+            <div id="positivePreviewBox" class="prompt-preview-box" style="margin-top:0;"></div>
+          </div>
+          <div>
+            <p style="font-size:11px; color:var(--text-muted); margin:0 0 2px;">부정</p>
+            <div id="negativePreviewBox" class="prompt-preview-box" style="margin-top:0;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tagOverlayBackdrop" class="tag-overlay-backdrop"></div>
+    <div id="tagOverlayPanel" class="tag-overlay-panel">
+      <div class="tag-overlay-handle"></div>
+      <div class="tag-overlay-header">
+        <span>태그 검색</span>
+        <button id="tagOverlayCloseBtn" type="button" aria-label="닫기" class="tag-overlay-close">✕</button>
+      </div>
+      <div class="tag-overlay-search-row">
+        <input type="text" id="tagOverlayInput" placeholder="태그 검색 (예: 미소, smile, 1girl)" autocomplete="off">
+        <button id="tagOverlayAddPos" type="button" disabled class="tag-action-btn tag-pos">긍정</button>
+        <button id="tagOverlayAddNeg" type="button" disabled class="tag-action-btn tag-neg">부정</button>
+      </div>
+      <div id="tagOverlaySelectedRow" class="tag-overlay-selected-row"></div>
+      <div id="tagOverlayList" class="tag-overlay-list"></div>
+    </div>
+
+    <div id="tagToast" class="tag-toast"></div>
+
+    <div id="pathPickerBackdrop" class="tag-overlay-backdrop"></div>
+    <div id="pathPickerPanel" class="tag-overlay-panel">
+      <div class="tag-overlay-handle"></div>
+      <div class="tag-overlay-header">
+        <span id="pathPickerTitle">선택</span>
+        <button id="pathPickerCloseBtn" type="button" aria-label="닫기" class="tag-overlay-close">✕</button>
+      </div>
+      <div style="padding:0 14px 8px; flex-shrink:0;">
+        <input type="text" id="pathPickerSearchInput" placeholder="검색..." autocomplete="off">
+      </div>
+      <div id="pathPickerCrumbRow" style="display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:0 14px 8px; flex-shrink:0;"></div>
+      <div id="pathPickerFileList" style="flex:1; min-height:0; overflow-y:auto; padding:0 14px 14px;"></div>
+    </div>
+
+    <div id="modelInfoBackdrop" class="tag-overlay-backdrop"></div>
+    <div id="modelInfoPanel" class="tag-overlay-panel">
+      <div class="tag-overlay-handle"></div>
+      <div class="tag-overlay-header">
+        <span id="modelInfoTitle">모델 정보</span>
+        <button id="modelInfoCloseBtn" type="button" aria-label="닫기" class="tag-overlay-close">✕</button>
+      </div>
+      <div id="modelInfoBody" style="flex:1; min-height:0; overflow-y:auto; padding:0 14px 16px;"></div>
+    </div>
+
+    <div id="wfSaveBackdrop" class="tag-overlay-backdrop"></div>
+    <div id="wfSavePanel" class="tag-overlay-panel">
+      <div class="tag-overlay-handle"></div>
+      <div class="tag-overlay-header">
+        <span>워크플로우 저장</span>
+        <button id="wfSaveCloseBtn" type="button" aria-label="닫기" class="tag-overlay-close">✕</button>
+      </div>
+      <div style="padding:0 14px 16px;">
+        <input type="text" id="wfSaveNameInput" placeholder="이름 (예: 인물 세로 기본)" style="width:100%; margin-bottom:6px;">
+        <p style="font-size:11px; color:var(--text-muted); margin:0 0 14px;">체크포인트, LoRA, 해상도, 샘플러, 프롬프트 등 지금 설정 전부가 서버에 저장됩니다.</p>
+        <div style="display:flex; gap:8px;">
+          <button id="wfSaveConfirmBtn" type="button" style="flex:1; border:none; background:var(--fill-brand); color:var(--on-brand); border-radius:var(--radius); padding:9px 0; font-size:13px;">저장</button>
+          <button id="wfSaveCancelBtn" type="button" style="flex:1; border:0.5px solid var(--border); background:none; color:var(--text-secondary); border-radius:var(--radius); padding:9px 0; font-size:13px;">취소</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="wfLoadBackdrop" class="tag-overlay-backdrop"></div>
+    <div id="wfLoadPanel" class="tag-overlay-panel">
+      <div class="tag-overlay-handle"></div>
+      <div class="tag-overlay-header">
+        <span>워크플로우 불러오기</span>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <button id="wfDeleteAllBtn" type="button" aria-label="전체 삭제" style="border:none; background:none; color:var(--text-danger); font-size:12px; padding:0; display:flex; align-items:center; gap:4px;">
+            <i class="ti ti-refresh" aria-hidden="true" style="font-size:14px;"></i>초기화
+          </button>
+          <button id="wfLoadCloseBtn" type="button" aria-label="닫기" class="tag-overlay-close">✕</button>
+        </div>
+      </div>
+      <div style="padding:0 14px 16px; flex:1; min-height:0; overflow-y:auto;">
+        <div style="display:flex; gap:4px; background:var(--surface-2); border-radius:var(--radius); padding:3px; margin-bottom:12px;">
+          <button type="button" class="wfLoadTab active" data-tab="list" style="flex:1; border:none; padding:7px 0; font-size:12px; border-radius:6px; background:var(--fill-primary); color:var(--on-primary);">저장된 목록</button>
+          <button type="button" class="wfLoadTab" data-tab="file" style="flex:1; border:none; padding:7px 0; font-size:12px; border-radius:6px; background:transparent; color:var(--text-secondary);">파일 업로드</button>
+          <button type="button" class="wfLoadTab" data-tab="image" style="flex:1; border:none; padding:7px 0; font-size:12px; border-radius:6px; background:transparent; color:var(--text-secondary);">이미지에서</button>
+        </div>
+
+        <div id="wfTabList" class="wfLoadTabPanel">
+          <input type="text" id="wfSearchInput" placeholder="저장한 이름으로 검색" style="width:100%; margin-bottom:8px;">
+          <div id="wfListItems" style="max-height:320px; overflow-y:auto;"></div>
+        </div>
+
+        <div id="wfTabFile" class="wfLoadTabPanel" style="display:none;">
+          <input type="file" id="wfFileInput" accept=".json" style="display:none;">
+          <button id="wfFilePickBtn" type="button" style="width:100%; border:0.5px solid var(--border); background:var(--surface-2); color:var(--text-primary); border-radius:var(--radius); padding:9px 0; font-size:13px; display:flex; align-items:center; justify-content:center; gap:6px;">
+            <i class="ti ti-upload" aria-hidden="true" style="font-size:15px;"></i>workflow.json 파일 선택
+          </button>
+          <p id="wfFileNameText" style="display:none; align-items:center; gap:6px; font-size:12px; color:var(--text-secondary); margin:8px 0 0;">
+            <i class="ti ti-file-check" aria-hidden="true" style="color:var(--text-success);"></i><span id="wfFileNameValue"></span>
+          </p>
+        </div>
+
+        <div id="wfTabImage" class="wfLoadTabPanel" style="display:none;">
+          <input type="file" id="wfImageInput" accept="image/png" style="display:none;">
+          <button id="wfImagePickBtn" type="button" style="width:100%; border:0.5px solid var(--border); background:var(--surface-2); color:var(--text-primary); border-radius:var(--radius); padding:9px 0; font-size:13px; display:flex; align-items:center; justify-content:center; gap:6px;">
+            <i class="ti ti-photo" aria-hidden="true" style="font-size:15px;"></i>ComfyUI로 생성된 이미지 선택
+          </button>
+          <p id="wfImageNameText" style="display:none; align-items:center; gap:6px; font-size:12px; color:var(--text-secondary); margin:8px 0 0;">
+            <i class="ti ti-file-check" aria-hidden="true" style="color:var(--text-success);"></i><span id="wfImageNameValue"></span>
+          </p>
+          <p style="font-size:11px; color:var(--text-muted); margin:8px 0 0;">이미지에 담긴 워크플로우 메타데이터에서 설정을 추출합니다. hires처럼 정해진 표시가 없는 옵션은 노드 구조를 보고 추정합니다.</p>
+        </div>
+
+        <div id="wfScopeSection">
+          <p style="font-size:12px; color:var(--text-secondary); margin:16px 0 8px;">무엇을 불러올까요?</p>
+          <label style="display:flex; align-items:flex-start; gap:8px; padding:8px; border:0.5px solid var(--border-accent); background:var(--bg-accent-muted); border-radius:var(--radius); margin-bottom:8px; cursor:pointer;">
+            <input type="radio" name="wfLoadScope" value="all" checked style="margin-top:2px;">
+            <span><span style="display:block; font-size:13px; font-weight:500;">전체 불러오기</span><span style="display:block; font-size:11px; color:var(--text-muted);">체크포인트, LoRA, 해상도, 샘플러 등 전부</span></span>
+          </label>
+          <label style="display:flex; align-items:flex-start; gap:8px; padding:8px; border:0.5px solid var(--border); background:var(--surface-2); border-radius:var(--radius); margin-bottom:14px; cursor:pointer;">
+            <input type="radio" name="wfLoadScope" value="prompt" style="margin-top:2px;">
+            <span><span style="display:block; font-size:13px; font-weight:500;">프롬프트만 불러오기</span><span style="display:block; font-size:11px; color:var(--text-muted);">긍정/부정 텍스트만 가져오고 나머지는 그대로</span></span>
+          </label>
+          <div style="display:flex; gap:8px;">
+            <button id="wfLoadConfirmBtn" type="button" style="flex:1; border:none; background:var(--text-accent); color:var(--on-accent); border-radius:var(--radius); padding:9px 0; font-size:13px;">불러오기</button>
+            <button id="wfLoadCancelBtn" type="button" style="flex:1; border:0.5px solid var(--border); background:none; color:var(--text-secondary); border-radius:var(--radius); padding:9px 0; font-size:13px;">취소</button>
+          </div>
+        </div>
+
+        <div id="wfFamMismatchNotice" style="display:none; background:var(--surface-2); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px 12px; margin-top:10px;">
+          <p id="wfFamMismatchText" style="font-size:13px; color:var(--text-primary); margin:0 0 10px;"></p>
+          <div style="display:flex; gap:8px;">
+            <button id="wfFamSwitchYesBtn" type="button" style="flex:1; border:none; background:var(--fill-primary); color:var(--on-primary); border-radius:var(--radius); padding:8px 0; font-size:12px;">예, 전환</button>
+            <button id="wfFamSwitchNoBtn" type="button" style="flex:1; border:0.5px solid var(--border); background:none; color:var(--text-secondary); border-radius:var(--radius); padding:8px 0; font-size:12px;">아니오</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="wfErrorToast" style="display:none; position:fixed; left:16px; right:16px; bottom:24px; z-index:200; background:var(--fill-danger); color:var(--on-danger); border-radius:var(--radius); padding:11px 14px; font-size:13px; text-align:center;"></div>
+
+    <div id="wfDeleteConfirmBackdrop" style="display:none; position:fixed; inset:0; z-index:220; background:rgba(0,0,0,0.45); align-items:center; justify-content:center; padding:16px;">
+      <div style="width:100%; max-width:340px; background:var(--surface-2); border-radius:12px; border:0.5px solid var(--border); padding:16px;">
+        <p style="font-size:14px; font-weight:500; margin:0 0 6px;">워크플로우 삭제</p>
+        <p id="wfDeleteConfirmText" style="font-size:13px; color:var(--text-secondary); margin:0 0 16px;">정말 삭제하시겠습니까?</p>
+        <div style="display:flex; gap:8px;">
+          <button id="wfDeleteConfirmBtn" type="button" style="flex:1; border:none; background:var(--fill-danger); color:var(--on-danger); border-radius:var(--radius); padding:9px 0; font-size:13px;">삭제</button>
+          <button id="wfDeleteCancelBtn" type="button" style="flex:1; border:0.5px solid var(--border); background:none; color:var(--text-secondary); border-radius:var(--radius); padding:9px 0; font-size:13px;">취소</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="wfDetailBackdrop" style="display:none; position:fixed; inset:0; z-index:210; background:rgba(0,0,0,0.45); align-items:center; justify-content:center; padding:16px;">
+      <div style="width:100%; max-width:380px; background:var(--surface-2); border-radius:12px; border:0.5px solid var(--border); padding:16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <p id="wfDetailTitle" style="font-size:14px; font-weight:500; margin:0;"></p>
+          <button id="wfDetailCloseBtn" type="button" aria-label="닫기" style="border:none; background:none; color:var(--text-secondary); font-size:16px;">✕</button>
+        </div>
+        <p style="font-size:11px; color:var(--text-muted); margin:0 0 4px;">긍정 프롬프트</p>
+        <p id="wfDetailPositive" style="font-size:12px; color:var(--text-primary); background:var(--surface-1); border-radius:var(--radius); padding:8px 10px; margin:0 0 12px; word-break:break-word;"></p>
+        <p style="font-size:11px; color:var(--text-muted); margin:0 0 4px;">부정 프롬프트</p>
+        <p id="wfDetailNegative" style="font-size:12px; color:var(--text-primary); background:var(--surface-1); border-radius:var(--radius); padding:8px 10px; margin:0; word-break:break-word;"></p>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="label-row" style="margin-bottom:6px;">
+        <label class="label" style="margin:0;">해상도 / 배치</label>
+        <button id="resPresetBtn" type="button" style="border:none; background:none; color:var(--text-accent); font-size:12px; padding:0;">해상도 프리셋</button>
+      </div>
+      <div class="res-grid">
+        <div>
+          <label class="label">너비</label>
+          <input type="number" id="widthInput" value="960" step="8">
+        </div>
+        <button type="button" id="resSwapBtn" aria-label="가로/세로 전환" style="border:none; background:none; color:var(--text-secondary); width:24px; height:36px; display:flex; align-items:center; justify-content:center; flex-shrink:0; padding:0; align-self:end; justify-self:center;">
+          <i class="ti ti-arrows-left-right" aria-hidden="true" style="font-size:15px;"></i>
+        </button>
+        <div>
+          <label class="label">높이</label>
+          <input type="number" id="heightInput" value="1280" step="8">
+        </div>
+        <div>
+          <label class="label">배치</label>
+          <div class="seed-controls" style="gap:4px;">
+            <button class="icon-btn" id="batchMinus" aria-label="배치 감소" type="button" style="width:26px; height:32px; flex-shrink:0;">−</button>
+            <input type="text" id="batchInput" value="1" style="padding:8px 2px; height:32px;">
+            <button class="icon-btn" id="batchPlus" aria-label="배치 증가" type="button" style="width:26px; height:32px; flex-shrink:0;">+</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="label-row" style="margin-bottom:6px;">
+        <label id="regionSectionLabel" class="label" style="margin:0; cursor:pointer; display:flex; align-items:center; gap:4px;">
+          영역별 프롬프트 <i class="ti ti-chevron-down" id="regionSectionChevron" aria-hidden="true" style="font-size:13px; transform:rotate(-90deg);"></i>
+        </label>
+        <button id="addRegionBtn" type="button" class="tag-search-btn">+ 영역 추가</button>
+      </div>
+      <div id="regionSectionBody" style="display:none;">
+        <div id="regionCanvas" style="position:relative; width:100%; max-width:280px; margin:0 auto; background:var(--surface-1); border:0.5px solid var(--border); border-radius:8px; overflow:hidden; touch-action:none;"></div>
+        <div id="regionList" style="margin-top:10px; display:flex; flex-direction:column; gap:8px;"></div>
+      </div>
+    </div>
+
+    <div id="resPresetBackdrop" class="tag-overlay-backdrop"></div>
+    <div id="resPresetPanel" class="tag-overlay-panel">
+      <div class="tag-overlay-handle"></div>
+      <div class="tag-overlay-header">
+        <span>해상도 프리셋</span>
+        <button id="resPresetCloseBtn" type="button" aria-label="닫기" class="tag-overlay-close">✕</button>
+      </div>
+      <div style="padding:0 14px 10px; flex-shrink:0;">
+        <input type="text" id="resPresetNameInput" placeholder="프리셋 이름 (예: 인물 세로)" style="width:100%; margin-bottom:6px;">
+        <div style="display:flex; gap:4px; align-items:end;">
+          <div style="flex:1;"><label class="label" style="margin:0;">너비</label><input type="number" id="resPresetWInput" value="960" step="8" style="width:100%;"></div>
+          <button type="button" id="resPresetSwapBtn" aria-label="가로/세로 전환" style="border:none; background:none; color:var(--text-secondary); width:24px; height:32px; display:flex; align-items:center; justify-content:center; flex-shrink:0; padding:0;">
+            <i class="ti ti-arrows-left-right" aria-hidden="true" style="font-size:15px;"></i>
+          </button>
+          <div style="flex:1;"><label class="label" style="margin:0;">높이</label><input type="number" id="resPresetHInput" value="1280" step="8" style="width:100%;"></div>
+          <div style="flex-shrink:0; margin-left:4px; min-width:44px;">
+            <label class="label" style="margin:0; display:block;">비율</label>
+            <span id="resPresetLiveRatio" style="font-size:13px; color:var(--text-primary); line-height:32px; cursor:pointer; display:inline-block;" title="눌러서 직접 입력">3:4</span>
+          </div>
+          <button id="resPresetSaveBtn" type="button" style="border:none; background:var(--fill-primary); color:var(--on-primary); border-radius:var(--radius); padding:0 14px; height:32px; font-size:12px; white-space:nowrap; flex-shrink:0;">저장</button>
+        </div>
+      </div>
+      <div id="resPresetList" style="flex:1; min-height:0; overflow-y:auto; padding:0 14px 16px; display:flex; flex-direction:column; gap:8px;"></div>
+    </div>
+
+    <div class="section" style="display:flex; flex-direction:column; gap:10px;">
+      <div class="two-col">
+        <div>
+          <label class="label">샘플러</label>
+          <div class="searchable-select">
+            <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+            <input type="hidden" id="samplerSelect">
+            <div class="searchable-dropdown"></div>
+          </div>
+        </div>
+        <div>
+          <label class="label">스케줄러</label>
+          <div class="searchable-select">
+            <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+            <input type="hidden" id="schedulerSelect">
+            <div class="searchable-dropdown"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="slider-row">
+        <div class="label-row">
+          <label class="label">스텝</label>
+          <span class="slider-out" id="stepsOut">24</span>
+        </div>
+        <input type="range" id="stepsRange" min="1" max="150" value="24">
+      </div>
+
+      <div class="slider-row">
+        <div class="label-row">
+          <label class="label">CFG</label>
+          <span class="slider-out" id="cfgOut">5.0</span>
+        </div>
+        <input type="range" id="cfgRange" min="1" max="15" step="0.5" value="5">
+      </div>
+
+      <div>
+        <div class="label-row">
+          <label class="label">시드</label>
+          <label class="randomize-label">
+            <input type="checkbox" id="randomizeSeed"> 랜덤
+          </label>
+        </div>
+        <div class="seed-controls">
+          <button class="icon-btn" id="seedMinus" aria-label="시드 감소" type="button">−</button>
+          <input type="text" id="seedInput" value="622366776744325">
+          <button class="icon-btn" id="seedPlus" aria-label="시드 증가" type="button">+</button>
+          <button class="icon-btn" id="seedUndo" aria-label="이전 시드로 되돌리기" type="button" disabled>↺</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;">
+        <input type="checkbox" id="hiresEnabled" style="width:16px; height:16px;">
+        Hires 사용
+      </label>
+
+      <div id="hiresBody" style="display:none; flex-direction:column; gap:10px; margin-top:12px;">
+        <div>
+          <label class="label">확대 방법</label>
+          <div class="searchable-select">
+            <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+            <input type="hidden" id="hiresUpscaleMethodSelect">
+            <div class="searchable-dropdown"></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="label-row"><label class="label">확대 배율</label><span class="slider-out" id="hiresScaleOut">1.25</span></div>
+          <input type="range" id="hiresScaleRange" min="1" max="4" step="0.05" value="1.25">
+        </div>
+
+        <div>
+          <div class="label-row"><label class="label">스텝</label><span class="slider-out" id="hiresStepsOut">20</span></div>
+          <input type="range" id="hiresStepsRange" min="1" max="150" value="20">
+        </div>
+
+        <div>
+          <div class="label-row"><label class="label">노이즈 제거 양</label><span class="slider-out" id="hiresDenoiseOut">0.45</span></div>
+          <input type="range" id="hiresDenoiseRange" min="0" max="1" step="0.01" value="0.45">
+        </div>
+
+        <div>
+          <div class="label-row" style="margin-bottom:4px;">
+            <button type="button" id="hiresAdvancedToggle" class="lora-text-btn" style="font-size:12px; padding:2px 0;">고급</button>
+          </div>
+          <p id="hiresAdvancedSummary" style="font-size:11px; color: var(--text-muted); margin:0 0 8px;"></p>
+          <div id="hiresAdvancedPanel" style="display:none; flex-direction:column; gap:8px;">
+            <div>
+              <div class="label-row"><label class="label">CFG</label><span class="slider-out" id="hiresCfgOut"></span></div>
+              <input type="range" id="hiresCfgRange" min="1" max="30" step="0.5" value="5">
+            </div>
+            <div>
+              <label class="label">샘플러</label>
+              <div class="searchable-select">
+                <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+                <input type="hidden" id="hiresSamplerSelect">
+                <div class="searchable-dropdown"></div>
+              </div>
+            </div>
+            <div>
+              <label class="label">스케줄러</label>
+              <div class="searchable-select">
+                <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+                <input type="hidden" id="hiresSchedulerSelect">
+                <div class="searchable-dropdown"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="generated-section" id="generatedSection">
+      <div class="generated-title-row">
+        <span class="generated-title">생성된 이미지</span>
+        <span id="resultStatus" class="result-status">아직 생성된 이미지가 없습니다</span>
+      </div>
+
+      <div id="currentResult" class="current-result">
+        <div id="resultImage" class="result-image-placeholder">이미지 미리보기</div>
+        <button id="preHiresToggleBtn" class="delete-image-btn" style="left:8px; right:auto; display:none;" type="button" aria-label="hires 이전 이미지로 전환">
+          <i class="ti ti-repeat" aria-hidden="true"></i>
+        </button>
+        <button id="deleteCurrentBtn" class="delete-image-btn" type="button" aria-label="이미지 삭제" style="display:none;">✕</button>
+        <div class="progress-track" id="progressTrack">
+          <div id="batchDots" style="display:flex; justify-content:center; gap:5px; padding-bottom:2px;"></div>
+          <div id="stepProgressBar" class="progress-bar-fill step-fill"></div>
+          <div id="progressBar" class="progress-bar-fill overall-fill"></div>
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <button id="reuseSettingsBtn" type="button" style="display:none; flex:1; min-width:0; border:0.5px solid var(--border); background: var(--surface-2); color: var(--text-primary); border-radius: var(--radius); padding:9px 0; font-size:13px; align-items:center; justify-content:center; gap:6px;">
+          <i class="ti ti-recycle" aria-hidden="true" style="font-size:15px;"></i>이 설정 재사용
+        </button>
+        <button id="upscaleBtn" type="button" style="display:none; flex:1; min-width:0; border:none; background: var(--fill-accent); color: var(--on-accent); border-radius: var(--radius); padding:9px 0; font-size:13px; align-items:center; justify-content:center; gap:6px; font-weight:500;">
+          <i class="ti ti-arrow-big-up-lines" aria-hidden="true" style="font-size:15px;"></i>업스케일
+        </button>
+        <button id="upscaleSettingsBtn" type="button" aria-label="업스케일 설정" style="display:none; width:38px; height:38px; flex-shrink:0; border:0.5px solid var(--border); background: var(--surface-2); color: var(--text-primary); border-radius: var(--radius); align-items:center; justify-content:center;">
+          <i class="ti ti-settings" aria-hidden="true" style="font-size:16px;"></i>
+        </button>
+      </div>
+
+      <div id="upscalePanel" style="display:none; margin-top:8px; padding:10px 12px; background: var(--surface-2); border:0.5px solid var(--border); border-radius: var(--radius);">
+        <label class="label" style="margin-bottom:4px;">업스케일 모델</label>
+        <div class="searchable-select" id="upscaleModelWrap">
+          <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+          <input type="hidden" id="upscaleModelSelect">
+          <div class="searchable-dropdown"></div>
+        </div>
+        <p id="upscaleModelError" style="display:none; color: var(--text-danger); font-size:12px; margin:6px 0 0;">Upscale 모델 설치 필요</p>
+      </div>
+
+      <div class="label-row" style="margin: 14px 0 7px;">
+        <span class="history-title" style="margin: 0;">이전 생성 이미지</span>
+        <button id="clearHistoryBtn" class="lora-remove-btn" type="button" aria-label="이전 생성 이미지 전체 삭제">✕</button>
+      </div>
+      <div id="imageHistory" class="image-history">
+        <div class="history-empty">이전에 생성한 이미지가 여기에 표시됩니다.</div>
+      </div>
+    </div>
+
+    <p class="scroll-hint">스크롤해도 생성 버튼은 항상 화면 하단에 고정됩니다</p>
+
+  </div>
+
+  <div id="scrollThumb"></div>
+
+  <div class="floating-area">
+    <div class="floating-inner">
+      <button id="genBtn" type="button">생성</button>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/base.js') }}"></script>
+</body>
+</html>
