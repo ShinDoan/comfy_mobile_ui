@@ -1465,12 +1465,20 @@ body.scroll-locked {
     min-width: 0;
   }
 
-  /* 모델 설정: 라벨 + 경로설정/초기화 한 줄, 그 아래 Anima|Illustrious */
-  .pc-modelset {
-    width: 270px;
+  /* 모델 설정: 라벨 + 경로설정/초기화 한 줄, 그 아래 Anima|Illustrious.
+     왼쪽 패널과 같은 너비로 상단 바 끝까지 채우고, 오른쪽 경계선을 패널 경계선과 이어지게 한다 */
+  .pc-topbar > .pc-modelset {
+    width: var(--pc-left);
+    box-sizing: border-box;
     flex-shrink: 0;
+    align-self: stretch;
+    /* 상단 바의 padding(10px 20px)을 상쇄하고, 오른쪽은 gap(14px)과 합쳐 20px 띄운다 */
+    margin: -10px 6px -10px -20px;
+    padding: 10px 16px;
+    border-right: 0.5px solid var(--border-strong);
     display: grid;
     grid-template-columns: 1fr auto;
+    align-content: end;
     row-gap: 4px;
     align-items: center;
   }
