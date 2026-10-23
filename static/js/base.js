@@ -1524,6 +1524,13 @@ function closePathPicker() {
   pathPickerContext = null;
 }
 
+// 경로 피커/모델 정보 패널은 열 때의 계열(Anima/IL) 목록을 그대로 들고 있으므로,
+// 계열을 바꾸기 전에 먼저 닫아서 이전 계열 모델을 고를 수 없게 한다.
+function closeFamilyBoundPanels() {
+  if (document.getElementById("pathPickerPanel").classList.contains("open")) closePathPicker();
+  if (document.getElementById("modelInfoPanel").classList.contains("open")) closeModelInfoOverlay();
+}
+
 // ============================================================
 // 모델 정보(CivitAI) - 체크포인트/LoRA의 ⓘ 버튼을 누르면 지금 선택된
 // 파일의 CivitAI 정보(미리보기 이미지, 예시 프롬프트, 트리거 워드)를 보여준다.
@@ -2109,6 +2116,7 @@ async function showWfDetail(id, name) {
 }
 
 function switchFamilyProgrammatically(fam) {
+  closeFamilyBoundPanels();
   currentFam = fam;
   document.querySelectorAll(".fam-btn").forEach((b) => b.classList.toggle("active", b.getAttribute("data-fam") === fam));
   refreshAllFilterDisplays();
@@ -2858,6 +2866,7 @@ function initPathPickerTrigger(hidden, kind, title) {
 function initFamilyToggle() {
   document.querySelectorAll(".fam-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
+      closeFamilyBoundPanels();
       currentFam = btn.getAttribute("data-fam");
       document.querySelectorAll(".fam-btn").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
@@ -3254,6 +3263,7 @@ function stopPreHiresAlternation(el) {
 function reuseSettings(settings) {
   if (!settings) return;
   const fam = settings.family && modelsCache[settings.family] ? settings.family : currentFam;
+  closeFamilyBoundPanels();
   currentFam = fam;
   document.querySelectorAll(".fam-btn").forEach((b) =>
     b.classList.toggle("active", b.getAttribute("data-fam") === currentFam)
