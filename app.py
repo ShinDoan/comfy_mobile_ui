@@ -1387,22 +1387,51 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
       아주 빨리 끝나는 작업의 완료 이벤트를 놓쳐서 한참 멈춰 있게 된다."""
     total_nodes = len(prompt)
     client_id = uuid.uuid4().hex
-    ws = open_progress_socket(client_id)
-    try:
-        result = comfy_request_json(f"{COMFY_URL}/prompt", {"prompt": prompt, "client_id": client_id}, timeout=15)
-        prompt_id = result.get("prompt_id")
-        if not prompt_id:
-            raise ComfyError(f"ComfyUI가 프롬프트를 거부했습니다: {result.get('node_errors', result)}")
+    # prompt_id 를 제출 전에 미리 정해서 함께 보낸다 (ComfyUI 가 지원). 그래야 대기열 화면이
+    # 제출 직후부터 이 작업을 "이 앱의 작업"으로 알아보고, 응답이 늦거나 끊겨도 작업을 다시 찾을 수 있다.
+    prompt_id = str(uuid.uuid4())
 
+    def set_prompt_id(pid):
         with generation_jobs_lock:
             if job_id in generation_jobs:
-                job = generation_jobs[job_id]
-                job["overall"] = 0
-                job["step"] = 0
-                job["prompt_id"] = prompt_id
-                # 배치의 이전 이미지에서 남은 미리보기/단계가 다음 이미지에 섞이지 않게 비운다.
-                job.pop("preview_image", None)
-                job.pop("stage", None)
+                generation_jobs[job_id]["prompt_id"] = pid
+
+    with generation_jobs_lock:
+        if job_id in generation_jobs:
+            job = generation_jobs[job_id]
+            job["overall"] = 0
+            job["step"] = 0
+            job["prompt_id"] = prompt_id
+            job["client_id"] = client_id
+            # 배치의 이전 이미지에서 남은 미리보기/단계가 다음 이미지에 섞이지 않게 비운다.
+            job.pop("preview_image", None)
+            job.pop("stage", None)
+
+    ws = open_progress_socket(client_id)
+    try:
+        try:
+            result = comfy_request_json(f"{COMFY_URL}/prompt",
+                                        {"prompt": prompt, "client_id": client_id, "prompt_id": prompt_id}, timeout=60)
+            submitted_id = result.get("prompt_id")
+            if not submitted_id:
+                raise ComfyError(f"ComfyUI가 프롬프트를 거부했습니다: {result.get('node_errors', result)}")
+        except ComfyError:
+            raise  # ComfyUI 가 명시적으로 거부함 (노드 오류 등)
+        except Exception as e:
+            # ComfyUI 가 바쁠 때(앞 작업의 모델 로딩 등) 응답만 늦거나 끊기는 경우가 있다.
+            # 이때 이미 대기열에는 들어가 있으므로, 실패로 끝내지 말고 대기열/기록에서 찾아본다.
+            print(f"[WARN] /prompt 응답을 받지 못해 대기열에서 작업을 찾아봅니다: {e}")
+            submitted_id = None
+            for _ in range(5):
+                submitted_id = find_submitted_prompt(prompt_id, client_id)
+                if submitted_id:
+                    break
+                time.sleep(2)
+            if not submitted_id:
+                raise ComfyError(f"ComfyUI에 작업을 넣지 못했습니다: {e}") from e
+        if submitted_id != prompt_id:  # 미리 정한 id 를 무시하는 구버전 ComfyUI
+            prompt_id = submitted_id
+            set_prompt_id(prompt_id)
 
         ws_outputs = {}
         wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview=bool(HIRES_NODE_IDS & set(prompt)))
@@ -1846,6 +1875,30 @@ def comfy_post_queue(payload):
     urllib.request.urlopen(req, timeout=5).close()
 
 
+def find_submitted_prompt(prompt_id, client_id):
+    """제출 응답을 받지 못한 작업을 ComfyUI 대기열/기록에서 prompt_id 또는 client_id 로 찾는다.
+    찾으면 실제 prompt_id, 못 찾으면 None."""
+    def same_client(entry):
+        return len(entry) > 3 and isinstance(entry[3], dict) and entry[3].get("client_id") == client_id
+    try:
+        q = fetch_comfy_queue()
+        for entry in (q.get("queue_running") or []) + (q.get("queue_pending") or []):
+            if len(entry) > 1 and (entry[1] == prompt_id or same_client(entry)):
+                return entry[1]
+    except Exception:
+        pass
+    if get_history_entry(prompt_id):
+        return prompt_id
+    try:
+        history = comfy_request_json(f"{COMFY_URL}/history?max_items=50", timeout=10)
+        for pid, item in (history or {}).items():
+            if same_client(item.get("prompt") or []):
+                return pid
+    except Exception:
+        pass
+    return None
+
+
 def delete_from_comfy_queue(prompt_ids):
     try:
         comfy_post_queue({"delete": list(prompt_ids)})
@@ -1907,6 +1960,7 @@ def api_queue():
 
     jobs = active_jobs_snapshot()
     by_prompt = {job["prompt_id"]: (jid, job) for jid, job in jobs.items() if job.get("prompt_id")}
+    by_client = {job["client_id"]: (jid, job) for jid, job in jobs.items() if job.get("client_id")}
     now = time.time()
     running_ids = {e[1] for e in running_raw}
     with queue_first_seen_lock:
@@ -1922,6 +1976,8 @@ def api_queue():
         pid = raw[1]
         item = {"prompt_id": pid, "running": running}
         jid, job = by_prompt.get(pid, (None, None))
+        if not job and len(raw) > 3 and isinstance(raw[3], dict):
+            jid, job = by_client.get(raw[3].get("client_id"), (None, None))
         if job:
             listed_jobs.add(jid)
             item.update(job_queue_fields(jid, job, device_id))
