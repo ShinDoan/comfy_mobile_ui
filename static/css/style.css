@@ -2618,12 +2618,6 @@ body.queue-active .page {
   font-size: 14px;
 }
 
-.queue-panel-hint {
-  font-size: 11px;
-  color: var(--text-secondary);
-  text-align: center;
-}
-
 /* 대기열 전체 종료 확인 창 */
 .queue-confirm {
   position: fixed;

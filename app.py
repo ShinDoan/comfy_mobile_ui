@@ -993,7 +993,14 @@ def load_image_index():
     except (json.JSONDecodeError, OSError):
         return []
 
+# 생성 이미지 목록이 바뀔 때마다 1씩 올린다. 화면은 대기열을 받아올 때 이 값을 같이 받아서,
+# 바뀌었으면(다른 기기의 작업이 끝났을 때 포함) 이미지 목록을 다시 불러온다.
+image_index_rev = 0
+
+
 def save_image_index(items):
+    global image_index_rev
+    image_index_rev += 1
     os.makedirs(IMAGE_DIR, exist_ok=True)
     tmp = IMAGE_INDEX_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -2038,7 +2045,8 @@ def api_queue():
 
     my_jobs = [jid for jid, job in sorted(jobs.items(), key=lambda kv: kv[1].get("created", 0))
                if job.get("device_id") == device_id]
-    return with_cookie(jsonify({"ok": ok, "items": items, "my_jobs": my_jobs}), device_id, is_new)
+    return with_cookie(jsonify({"ok": ok, "items": items, "my_jobs": my_jobs, "images_rev": image_index_rev}),
+                       device_id, is_new)
 
 
 @app.route("/api/queue/stop-current", methods=["POST"])

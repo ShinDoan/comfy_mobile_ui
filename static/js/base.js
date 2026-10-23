@@ -3337,12 +3337,17 @@ function renderHistory(items) {
   });
 }
 
-async function loadGeneratedImages() {
+// historyOnly: 지금 크게 보고 있는 이미지(또는 생성 중 미리보기)는 그대로 두고 아래 목록만 갱신한다.
+async function loadGeneratedImages(options = {}) {
   try {
     const res = await fetch(`/api/generated-images?family=${encodeURIComponent(currentFam)}`);
     if (!res.ok) return;
     const items = await res.json();
     renderHistory(items);
+    if (options.historyOnly) {
+      selectedThumbEl = null;
+      return;
+    }
     if (items.length) {
       renderCurrentImage(items[0], false);
       const firstCard = document.querySelector("#imageHistory .history-card");
@@ -3503,7 +3508,7 @@ function initUpscaleControls() {
 // 을 그린다. 중지 버튼은 짧게 누르면 현재 작업(요청 전체)만, 1초 길게 누르면 확인 후 대기열 전체를 종료한다.
 // ============================================================
 
-const queueState = { items: [], myJobs: [], ok: true, fetchedAt: 0 };
+const queueState = { items: [], myJobs: [], ok: true, fetchedAt: 0, imagesRev: null };
 // initGenerate 가 채워 넣는 연결고리 (내 작업 목록/포커스는 생성 쪽이 관리한다)
 const queueHooks = { onUpdate: null, hasMyJobs: () => false, adoptJob: null };
 // 업스케일처럼 다른 코드가 직접 진행도를 지켜보는 작업 (대기열 쪽에서 다시 지켜보지 않는다)
@@ -3569,6 +3574,14 @@ async function refreshQueue() {
       queueState.ok = data.ok !== false;
       queueState.fetchedAt = Date.now();
       if (queueHooks.adoptJob) queueState.myJobs.forEach((id) => queueHooks.adoptJob(id));
+      // 어느 작업이든(다른 기기 포함) 이미지가 저장되면 목록을 바로 다시 불러온다.
+      // 내 작업을 생성 중이면 미리보기를 덮지 않도록 목록만 갱신한다.
+      if (data.images_rev != null) {
+        if (queueState.imagesRev != null && data.images_rev !== queueState.imagesRev) {
+          loadGeneratedImages({ historyOnly: queueHooks.hasMyJobs() });
+        }
+        queueState.imagesRev = data.images_rev;
+      }
     }
   } catch (_) {
     /* 다음 주기에 다시 시도한다 */
@@ -3897,10 +3910,8 @@ function initQueue() {
     onLong: openQueueConfirm,
     hint: document.getElementById("queueStopHint"),
   });
-  attachLongPress(document.getElementById("queueClearBtn"), {
-    onShort: () => showQueueToast("1초 동안 길게 누르면 대기열 전체를 종료합니다"),
-    onLong: openQueueConfirm,
-  });
+  // 대기열 목록 안의 전체 종료 버튼은 한 번 누르면 바로 확인 창을 연다 (확인 창이 실수를 막아준다).
+  document.getElementById("queueClearBtn").addEventListener("click", openQueueConfirm);
 
   document.getElementById("queueCloseBtn").addEventListener("click", closeQueuePanel);
   document.getElementById("queueBackdrop").addEventListener("click", closeQueuePanel);
