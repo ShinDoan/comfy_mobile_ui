@@ -428,26 +428,90 @@ button {
   padding: 8px 10px;
 }
 
-.progress-bar-fill {
-  height: 4px;
-  border-radius: 2px;
-  background: var(--surface-1);
-  overflow: hidden;
+/* 한 줄 진행도 바: 뒤 어두운 층 = 현재 단계, 앞 밝은 층 = 전체 */
+.progress-meter {
+  --bar-track: #e4e2d9;
+  --bar-step: #a8431f;
+  --bar-overall: #f1782f;
   position: relative;
 }
 
-.progress-bar-fill::after {
-  content: "";
-  display: block;
-  position: absolute;
-  inset: 0;
-  width: var(--pct, 0%);
-  background: var(--fill-brand);
-  transition: width 0.2s ease;
+@media (prefers-color-scheme: dark) {
+  .progress-meter {
+    --bar-track: #3a3831;
+    --bar-step: #8f3a19;
+    --bar-overall: #f58a45;
+  }
 }
 
-.step-fill::after {
-  opacity: 0.6;
+.progress-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bar-track);
+  overflow: hidden;
+}
+
+.progress-bar > i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: block;
+  transition: width 0.18s linear;
+}
+
+.progress-step {
+  width: var(--step, 0%);
+  background: var(--bar-step);
+}
+
+.progress-overall {
+  width: var(--overall, 0%);
+  background: var(--bar-overall);
+  border-radius: 0 4px 4px 0;
+}
+
+/* 생성 중 미리보기 위의 "현재% / 전체%" - 이미지 블러 레이어와 형제 요소라 블러가 걸리지 않는다 */
+.result-stage {
+  position: relative;
+}
+
+.progress-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.progress-overlay[hidden] {
+  display: none;
+}
+
+.progress-overlay .progress-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  padding: 5px 14px 4px;
+  border-radius: 14px;
+  background: rgba(20, 18, 15, 0.6);
+  color: #fff;
+}
+
+.progress-overlay b {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-overlay span {
+  font-size: 10px;
+  opacity: 0.8;
 }
 
 .history-title {
@@ -554,13 +618,6 @@ button {
 #genBtn.stop-mode {
   background: var(--fill-danger);
   color: var(--on-danger);
-}
-
-.scroll-hint {
-  padding: 16px;
-  text-align: center;
-  color: var(--text-muted);
-  font-size: 12px;
 }
 
 /* 스크롤 시에만 나타나는 얇은 인디케이터 */
@@ -1281,4 +1338,609 @@ body.scroll-locked {
   height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+/* =====================================================================
+   PC(가로 화면) 레이아웃
+   - 세로로 긴 화면(모바일): 위의 기존 스타일 그대로
+   - 가로로 긴 화면 + 너비 900px 이상: 아래 규칙이 덮어써서 PC 화면이 된다.
+     (가로로 눕힌 스마트폰은 너비가 900px 미만이라 모바일 화면을 유지)
+
+   ┌──────────────────────── 상단 바 (모델 설정 / 체크포인트 / CLIP / VAE) ────────────────────────┐
+   │ 설정 패널(460px)  │ 보조 패널(380px, 열릴 때만) │ 이미지 영역                                   │
+   │  LoRA·프롬프트·   │  태그 검색, 해상도 프리셋,   │  미리보기 / 진행도 / 히스토리                │
+   │  해상도·샘플링…   │  Hires, 영역별, 정보 …       │                                                │
+   └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   ===================================================================== */
+
+/* PC 에서만 보이는 요소는 기본(모바일)에서 숨김 */
+.pc-only,
+.progress-meta,
+.t-pc {
+  display: none;
+}
+
+.progress-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.progress-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.progress-legend i {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.progress-legend .lg-step {
+  background: #a8431f;
+}
+
+.progress-legend .lg-overall {
+  background: #f1782f;
+}
+
+@media (prefers-color-scheme: dark) {
+  .progress-legend .lg-step {
+    background: #8f3a19;
+  }
+  .progress-legend .lg-overall {
+    background: #f58a45;
+  }
+}
+
+@media (min-aspect-ratio: 1/1) and (min-width: 900px) {
+  :root {
+    --pc-top: 76px;
+    --pc-left: 460px;
+    --pc-side: 380px;
+    --pc-gen-h: 70px; /* 왼쪽 패널 아래 생성 버튼 줄 높이 */
+  }
+
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .pc-only {
+    display: inline-flex;
+  }
+
+  .pc-only[hidden] {
+    display: none !important;
+  }
+
+  .t-m {
+    display: none;
+  }
+
+  .t-pc {
+    display: inline;
+  }
+
+  #scrollThumb {
+    display: none;
+  }
+
+  /* ---------- 전체 틀 ---------- */
+  .page {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    height: 100dvh;
+    display: grid;
+    grid-template-columns: var(--pc-left) minmax(0, 1fr);
+    grid-template-rows: var(--pc-top) minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  /* ---------- 상단 바 ---------- */
+  .pc-topbar {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    display: flex;
+    align-items: flex-end;
+    gap: 14px;
+    padding: 10px 20px;
+    background: var(--surface-2);
+    border-bottom: 0.5px solid var(--border-strong);
+    position: relative;
+    z-index: 40;
+    min-width: 0;
+  }
+
+  .pc-topbar > .section {
+    padding: 0;
+    border-bottom: none;
+    position: relative;
+    min-width: 0;
+  }
+
+  /* 모델 설정: 라벨 + 경로설정/초기화 한 줄, 그 아래 Anima|Illustrious */
+  .pc-modelset {
+    width: 270px;
+    flex-shrink: 0;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    row-gap: 4px;
+    align-items: center;
+  }
+
+  .pc-modelset .label-row {
+    display: contents;
+  }
+
+  .pc-modelset .section-title {
+    grid-column: 1;
+    grid-row: 1;
+    margin: 0 !important;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+
+  .pc-modelset .label-row > div {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .pc-modelset .family-toggle {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .pc-modelset #resetConfirm {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    width: 380px;
+    z-index: 60;
+    margin: 0 !important;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  }
+
+  .pc-ckpt {
+    flex: 1.6 1 0;
+  }
+
+  .pc-ckpt #ckptFilterPanel {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 60;
+    margin: 0 !important;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  }
+
+  /* CLIP / VAE / CLIP 스킵은 .section 껍데기를 벗기고 상단 바의 칸이 된다 */
+  .pc-clipvae {
+    display: contents;
+  }
+
+  .pc-clipvae #animaClipRow,
+  .pc-clipvae .pc-vae {
+    flex: 1 1 0;
+    min-width: 0;
+    margin: 0 !important;
+  }
+
+  .pc-clipvae #clipSkipSection {
+    position: relative;
+    flex: 0 0 auto;
+    padding-bottom: 6px;
+  }
+
+  .pc-clipvae #clipSkipSection .label-row {
+    margin: 0 !important;
+  }
+
+  .pc-clipvae #clipSkipRow {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    width: 230px;
+    z-index: 60;
+    margin: 0 !important;
+    padding: 10px;
+    background: var(--surface-2);
+    border: 0.5px solid var(--border-strong);
+    border-radius: var(--radius);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  }
+
+  /* ---------- 왼쪽 설정 패널 ---------- */
+  .pc-left {
+    grid-column: 1;
+    grid-row: 2;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-2);
+    border-right: 0.5px solid var(--border-strong);
+    /* 생성 버튼 줄만큼 아래를 비워서, 스크롤 영역(과 스크롤 막대)이 버튼을 침범하지 않게 한다 */
+    margin-bottom: var(--pc-gen-h);
+    padding-bottom: 12px;
+    scrollbar-width: thin;
+  }
+
+  .pc-left > .section {
+    flex-shrink: 0;
+  }
+
+  .pc-left > .pc-region {
+    order: 10;
+    border-bottom: none;
+  }
+
+  .pc-hires {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* 생성 버튼: 왼쪽 패널 아래에 고정 */
+  .floating-area {
+    right: auto;
+    width: var(--pc-left);
+    height: var(--pc-gen-h);
+    padding: 0 16px;
+    box-sizing: border-box;
+    border-right: 0.5px solid var(--border-strong);
+    background: var(--surface-2);
+    border-top: 0.5px solid var(--border-strong);
+    pointer-events: auto;
+  }
+
+  .floating-inner {
+    max-width: none;
+  }
+
+  #genBtn {
+    box-shadow: none;
+    padding: 13px 0;
+  }
+
+  /* ---------- 보조 패널 (왼쪽 패널과 이미지 영역 사이) ---------- */
+  .tag-overlay-backdrop {
+    display: none !important;
+  }
+
+  .tag-overlay-handle {
+    display: none;
+  }
+
+  .tag-overlay-panel {
+    left: var(--pc-left);
+    right: auto;
+    width: var(--pc-side);
+    top: var(--pc-top);
+    bottom: 0;
+    max-width: none;
+    margin: 0;
+    border-radius: 0;
+    border-right: 0.5px solid var(--border-strong);
+    padding-top: 6px;
+    box-sizing: border-box;
+  }
+
+  .pc-topbar > #modelPathsSection,
+  #hiresBody,
+  #regionSectionBody {
+    position: fixed;
+    left: var(--pc-left);
+    top: var(--pc-top);
+    bottom: 0;
+    width: var(--pc-side);
+    box-sizing: border-box;
+    overflow-y: auto;
+    background: var(--surface-1);
+    border-right: 0.5px solid var(--border-strong);
+    border-bottom: none;
+    z-index: 91;
+    margin: 0 !important;
+    padding: 56px 16px 20px;
+  }
+
+  .pc-topbar > #modelPathsSection {
+    padding-top: 56px;
+  }
+
+  #hiresBody::before,
+  #regionSectionBody::before,
+  .pc-topbar > #modelPathsSection::before {
+    position: absolute;
+    left: 16px;
+    top: 16px;
+    font-size: 15px;
+    font-weight: 500;
+  }
+
+  #hiresBody::before {
+    content: "Hires 설정";
+  }
+
+  #regionSectionBody::before {
+    content: "영역별 프롬프트";
+  }
+
+  .pc-topbar > #modelPathsSection::before {
+    content: "경로 설정";
+  }
+
+  #hiresBody.pc-side-hidden {
+    display: none !important;
+  }
+
+  .pc-panel-close {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    width: 30px;
+    height: 30px;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: none;
+    color: var(--text-secondary);
+    font-size: 16px;
+    padding: 0;
+  }
+
+  /* ---------- 오른쪽 이미지 영역 ---------- */
+  /* 왼쪽(1열): 제목 / 이미지 / 버튼 / 업스케일 패널,  오른쪽(2열): 이전 생성 이미지 세로 컬럼 */
+  .generated-section {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 176px;
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    overflow: hidden;
+    padding: 0 0 14px;
+    border-bottom: none;
+    transition: margin-left 0.15s ease;
+  }
+
+  body.pc-side-open .generated-section {
+    margin-left: var(--pc-side);
+  }
+
+  .generated-section .generated-title-row {
+    grid-column: 1;
+    grid-row: 1;
+    margin: 0;
+    padding: 16px 20px 10px;
+  }
+
+  #currentResult {
+    grid-column: 1;
+    grid-row: 2;
+    width: auto;
+    margin: 0 20px;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .pc-result-actions {
+    grid-column: 1;
+    grid-row: 3;
+    margin: 10px 20px 0 !important;
+  }
+
+  #upscalePanel {
+    grid-column: 1;
+    grid-row: 4;
+    margin: 8px 20px 0 !important;
+  }
+
+  .pc-history-head {
+    grid-column: 2;
+    grid-row: 1;
+    margin: 0 !important;
+    padding: 16px 12px 8px 14px;
+    background: var(--surface-1);
+    border-left: 0.5px solid var(--border-strong);
+  }
+
+  .pc-history-head .history-title {
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  #currentResult .result-stage {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  #resultImage {
+    height: 100%;
+    min-height: 0;
+  }
+
+  #resultImage.generating,
+  #resultImage.error {
+    min-height: 0;
+  }
+
+  #resultImage img {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    object-fit: contain;
+  }
+
+  .progress-track {
+    flex-shrink: 0;
+    padding: 10px 12px 12px;
+  }
+
+  .progress-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .progress-stage-label {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .progress-overlay b {
+    font-size: 18px;
+  }
+
+  .progress-overlay span {
+    font-size: 11px;
+  }
+
+  /* 이전 생성 이미지: 세로로 쌓이고 이 컬럼 안에서만 스크롤 */
+  .image-history {
+    grid-column: 2;
+    grid-row: 2 / span 3;
+    width: auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 4px 14px 16px;
+    background: var(--surface-1);
+    border-left: 0.5px solid var(--border-strong);
+    scroll-snap-type: none;
+  }
+
+  .image-history .history-card {
+    flex-shrink: 0;
+    width: 100%;
+  }
+
+  .image-history .history-empty {
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 4px 0;
+  }
+
+  /* ---------- iOS 스타일 스크롤바 ----------
+     기본 스크롤바는 모두 숨기고, 스크롤하는 동안에만 얇은 막대(#pcScrollThumb)를 오른쪽 가장자리에
+     겹쳐서 보여준다. 막대는 pc_layout.js 가 스크롤 중인 영역 위로 옮겨 다닌다. */
+  * {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+
+  *::-webkit-scrollbar {
+    width: 0 !important;
+    height: 0 !important;
+    display: none !important;
+  }
+
+  body #pcScrollThumb {
+    display: block;
+  }
+
+  /* ---------- iOS 스타일 슬라이더 ---------- */
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    height: 20px;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+    --pn: 0.5;
+  }
+
+  input[type="range"]:focus {
+    outline: none;
+  }
+
+  input[type="range"]:focus-visible {
+    outline: 2px solid var(--fill-accent);
+    outline-offset: 2px;
+    border-radius: 10px;
+  }
+
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 3px;
+    border-radius: 2px;
+    background: linear-gradient(
+      to right,
+      var(--fill-brand) 0,
+      var(--fill-brand) calc(12px + (100% - 24px) * var(--pn)),
+      var(--border-strong) calc(12px + (100% - 24px) * var(--pn)),
+      var(--border-strong) 100%
+    );
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 24px;
+    height: 16px;
+    margin-top: -6.5px;
+    border-radius: 8px; /* 알약형 손잡이 */
+    background: #fff;
+    border: 0.5px solid rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+  }
+
+  input[type="range"]::-moz-range-track {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border-strong);
+  }
+
+  input[type="range"]::-moz-range-progress {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--fill-brand);
+  }
+
+  input[type="range"]::-moz-range-thumb {
+    width: 23px;
+    height: 15px;
+    border-radius: 8px;
+    background: #fff;
+    border: 0.5px solid rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+  }
+}
+
+/* PC 스크롤 막대 (기본은 숨김, PC 레이아웃에서만 display:block) */
+#pcScrollThumb {
+  display: none;
+  position: fixed;
+  width: 3px;
+  border-radius: 2px;
+  background: rgba(27, 26, 23, 0.4);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+  z-index: 300;
+}
+
+@media (prefers-color-scheme: dark) {
+  #pcScrollThumb {
+    background: rgba(242, 241, 236, 0.45);
+  }
 }
