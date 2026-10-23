@@ -228,7 +228,7 @@ def get_node_options(node_type, input_name, max_age=15, retries=3):
 
 FILTER_SETTINGS_FILE = os.path.join(DATA_DIR, "filter_settings.json")
 DEFAULT_FILTER_KEYWORDS = {"anima": ["ANIMA"], "il": ["IL"]}
-FILTER_KINDS = ("lora", "checkpoint")
+FILTER_KINDS = ("lora", "checkpoint", "clip", "vae")
 
 
 def _default_family_filter():
@@ -306,13 +306,13 @@ def get_comfyui_models(max_age=15):
         "anima": {
             "checkpoints": apply_filter("checkpoint", "anima", anima_unets),
             "loras": apply_filter("lora", "anima", all_loras),
-            "clips": clips,
-            "vaes": vaes,
+            "clips": apply_filter("clip", "anima", clips),
+            "vaes": apply_filter("vae", "anima", vaes),
         },
         "il": {
             "checkpoints": apply_filter("checkpoint", "il", il_checkpoints),
             "loras": apply_filter("lora", "il", all_loras),
-            "vaes": vaes,
+            "vaes": apply_filter("vae", "il", vaes),
         },
     }
 
@@ -332,7 +332,7 @@ def api_save_filter_settings(kind):
     if kind not in FILTER_KINDS:
         return jsonify({"error": "unknown kind"}), 404
     payload = request.get_json(silent=True) or {}
-    # "일괄 적용": kinds에 ["lora", "checkpoint"]를 지정하면 같은 키워드를 두 종류 모두에 적용한다.
+    # "일괄 적용": kinds에 ["lora", "checkpoint", "clip", "vae"]를 지정하면 같은 키워드를 모든 종류에 적용한다.
     target_kinds = payload.get("kinds") or [kind]
     target_kinds = [k for k in target_kinds if k in FILTER_KINDS]
 

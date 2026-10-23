@@ -1,5 +1,5 @@
 // ============================================================
-// ComfyUI API에서 받아온 실제 체크포인트 / LoRA 목록을
+// ComfyUI API에서 받아온 실제 체크포인트 / LoRA / CLIP / VAE 목록을
 // 모델 계열별로 캐싱합니다.
 // Anima: UNETLoader / Illustrious: CheckpointLoaderSimple
 // ============================================================
@@ -1236,8 +1236,8 @@ function updateAdvancedSection() {
 
   if (currentFam === "anima") {
     clipRow.style.display = "block";
-    setSearchableOptions(document.getElementById("clipSelect"), modelsCache.anima.clips || []);
-    setSearchableOptions(vaeSelect, modelsCache.anima.vaes || []);
+    setSearchableOptions(document.getElementById("clipSelect"), optionsWithStrippedLabels(modelsCache.anima.clips, "clip", "anima"));
+    setSearchableOptions(vaeSelect, optionsWithStrippedLabels(modelsCache.anima.vaes, "vae", "anima"));
 
     // Anima는 CLIP 구조가 달라 CLIP 스킵을 지원하지 않음
     clipSkipSection.style.display = "none";
@@ -1248,27 +1248,32 @@ function updateAdvancedSection() {
     clipRow.style.display = "none";
     setSearchableOptions(vaeSelect, [
       { value: "", label: "기본값 (체크포인트 내장 VAE)" },
-      ...(modelsCache.il.vaes || []).map((v) => ({ value: v, label: v })),
+      ...optionsWithStrippedLabels(modelsCache.il.vaes, "vae", "il"),
     ]);
     clipSkipSection.style.display = "block";
   }
 }
 
 // ============================================================
-// 필터링 키워드 설정(체크포인트/LoRA 공용) - 서버에 저장된 커스텀 키워드(계열별)를
+// 필터링 키워드 설정(체크포인트/LoRA/CLIP/VAE 공용) - 서버에 저장된 커스텀 키워드(계열별)를
 // 불러오고, 톱니바퀴로 편집/적용한다. 비워두면 기본값(계열 이름)을 쓰고,
 // "필터링 사용 안함"을 누르면 그 계열은 전체 목록을 다 보여준다.
-// "일괄 적용"을 누르면 체크포인트/LoRA 필터를 동시에 같은 키워드로 맞춘다.
+// "일괄 적용"을 누르면 체크포인트/LoRA/CLIP/VAE 필터를 동시에 같은 키워드로 맞춘다.
 // ============================================================
 
 const filterState = {
   lora: { anima: { keywords: [], disabled: false }, il: { keywords: [], disabled: false } },
   checkpoint: { anima: { keywords: [], disabled: false }, il: { keywords: [], disabled: false } },
+  clip: { anima: { keywords: [], disabled: false }, il: { keywords: [], disabled: false } },
+  vae: { anima: { keywords: [], disabled: false }, il: { keywords: [], disabled: false } },
   defaults: { anima: ["ANIMA"], il: ["IL"] },
 };
+const FILTER_KINDS = ["lora", "checkpoint", "clip", "vae"];
+// 각 종류별 톱니바퀴/패널 요소 id 접두사
+const FILTER_ID_PREFIX = { lora: "lora", checkpoint: "ckpt", clip: "clip", vae: "vae" };
 
 function refreshFilterDisplay(kind) {
-  const display = document.getElementById(`${kind === "lora" ? "lora" : "ckpt"}FilterDisplay`);
+  const display = document.getElementById(`${FILTER_ID_PREFIX[kind]}FilterDisplay`);
   const entry = filterState[kind][currentFam] || { keywords: [], disabled: false };
   const def = filterState.defaults[currentFam] || [];
   if (entry.disabled) {
@@ -1281,8 +1286,7 @@ function refreshFilterDisplay(kind) {
 }
 
 function refreshAllFilterDisplays() {
-  refreshFilterDisplay("lora");
-  refreshFilterDisplay("checkpoint");
+  FILTER_KINDS.forEach(refreshFilterDisplay);
 }
 
 // 필터가 바뀌었을 때, 이미 화면에 떠 있는 각 LoRA 행의 드롭다운 목록(옵션 자체)을
@@ -1300,8 +1304,19 @@ function refreshCkptSelectOptions() {
   setSearchableOptions(document.getElementById("ckptSelect"), optionsWithStrippedLabels(modelsCache[currentFam].checkpoints, "checkpoint", currentFam));
 }
 
+// CLIP/VAE 목록도 다시 채우되, 지금 선택된 값이 새 목록에 남아 있으면 그대로 유지한다.
+function refreshClipVaeSelectOptions() {
+  const clipSelect = document.getElementById("clipSelect");
+  const vaeSelect = document.getElementById("vaeSelect");
+  const prevClip = clipSelect.value;
+  const prevVae = vaeSelect.value;
+  updateAdvancedSection();
+  if (currentFam === "anima") setSearchableValue(clipSelect, pickValidOr(clipSelect, prevClip));
+  setSearchableValue(vaeSelect, pickValidOr(vaeSelect, prevVae));
+}
+
 async function initFilterSettingsPanel(kind) {
-  const prefix = kind === "lora" ? "lora" : "ckpt";
+  const prefix = FILTER_ID_PREFIX[kind];
   const gearBtn = document.getElementById(`${prefix}FilterGearBtn`);
   const panel = document.getElementById(`${prefix}FilterPanel`);
   const input = document.getElementById(`${prefix}FilterInput`);
@@ -1332,13 +1347,14 @@ async function initFilterSettingsPanel(kind) {
       const data = await res.json();
       filterState[kind].anima = data.anima;
       filterState[kind].il = data.il;
-      // 일괄 적용이었다면, 반대쪽 종류도 서버에서 같은 값으로 저장됐으니 다시 받아온다.
+      // 일괄 적용이었다면, 나머지 종류도 서버에서 같은 값으로 저장됐으니 다시 받아온다.
       if (kindsToApply && kindsToApply.length > 1) {
-        const otherKind = kind === "lora" ? "checkpoint" : "lora";
-        const otherRes = await fetch(`/api/filter-settings/${otherKind}`);
-        const otherData = await otherRes.json();
-        filterState[otherKind].anima = otherData.anima;
-        filterState[otherKind].il = otherData.il;
+        for (const otherKind of kindsToApply.filter((k) => k !== kind)) {
+          const otherRes = await fetch(`/api/filter-settings/${otherKind}`);
+          const otherData = await otherRes.json();
+          filterState[otherKind].anima = otherData.anima;
+          filterState[otherKind].il = otherData.il;
+        }
       }
     } catch (e) {
       /* 저장 실패 시에도 화면은 방금 입력한 값으로 갱신해서 UX를 막지 않는다 */
@@ -1349,6 +1365,7 @@ async function initFilterSettingsPanel(kind) {
     await loadModels(); // 필터가 바뀌었으니 캐시를 새로 받아오고
     refreshAllLoraRowOptions();
     refreshCkptSelectOptions();
+    refreshClipVaeSelectOptions();
   }
 
   gearBtn.addEventListener("click", () => {
@@ -1372,7 +1389,7 @@ async function initFilterSettingsPanel(kind) {
   applyBothBtn.addEventListener("click", async () => {
     const raw = input.value.trim();
     const keywords = raw ? raw.split(",").map((k) => k.trim()).filter((k) => k.length) : [];
-    await persist({ keywords, disabled: false }, ["lora", "checkpoint"]);
+    await persist({ keywords, disabled: false }, FILTER_KINDS);
   });
 
   disableBtn.addEventListener("click", async () => {
@@ -1383,6 +1400,8 @@ async function initFilterSettingsPanel(kind) {
 async function initLoraFilterSettings() {
   await initFilterSettingsPanel("lora");
   await initFilterSettingsPanel("checkpoint");
+  await initFilterSettingsPanel("clip");
+  await initFilterSettingsPanel("vae");
 }
 
 

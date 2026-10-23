@@ -92,7 +92,24 @@ margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 �
 
     <div class="section pc-clipvae">
       <div id="animaClipRow" style="margin-bottom:10px;">
-        <label class="label">CLIP 모델</label>
+        <label class="label" style="display:flex; align-items:baseline; gap:6px; flex-wrap:wrap;">
+          <span>CLIP 모델</span>
+          <button id="clipFilterGearBtn" type="button" aria-label="필터링 키워드 설정" style="border:none; background:none; color:var(--text-secondary); font-size:12px; padding:0; display:inline-flex; align-items:center; margin-left:2px;">
+          <i class="ti ti-settings" aria-hidden="true"></i>
+        </button>
+        <span id="clipFilterDisplay" style="font-size:11px; color:var(--text-muted);"></span>
+        </label>
+        <div id="clipFilterPanel" style="display:none; margin-bottom:8px; background:var(--surface-1); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px;">
+          <p style="font-size:12px; color:var(--text-secondary); margin:0 0 6px;">필터링 키워드 (CLIP 경로 텍스트가 이 단어로 시작해야 목록에 표시됩니다. 콤마로 여러 개 입력 가능)</p>
+          <input type="text" id="clipFilterInput" placeholder="예: ANIMA, ANI-V2" style="width:100%; margin-top:0;">
+          <p id="clipFilterDefaultHint" style="font-size:11px; color:var(--text-muted); margin:6px 0 0;"></p>
+          <button id="clipFilterDisableBtn" type="button" style="width:100%; margin-top:8px; border:0.5px dashed var(--border-strong); background:none; color:var(--text-secondary); padding:7px 0; border-radius:var(--radius); font-size:12px;">필터링 사용 안함 (전체 표시)</button>
+          <div style="display:flex; gap:8px; margin-top:10px;">
+            <button id="clipFilterApplyBtn" type="button" style="flex:1; border:none; background:var(--fill-primary); color:var(--on-primary); padding:8px 0; border-radius:var(--radius); font-size:13px;">적용</button>
+            <button id="clipFilterApplyBothBtn" type="button" style="flex:1; border:0.5px solid var(--border-accent); background:none; color:var(--text-accent); padding:8px 0; border-radius:var(--radius); font-size:13px;">일괄 적용</button>
+            <button id="clipFilterCancelBtn" type="button" style="flex:1; border:0.5px solid var(--border); background:none; color:var(--text-secondary); padding:8px 0; border-radius:var(--radius); font-size:13px;">취소</button>
+          </div>
+        </div>
         <div class="searchable-select">
           <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
           <input type="hidden" id="clipSelect">
@@ -100,7 +117,24 @@ margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 �
         </div>
       </div>
       <div class="pc-vae">
-        <label class="label" id="vaeLabel">VAE</label>
+        <label class="label" id="vaeLabel" style="display:flex; align-items:baseline; gap:6px; flex-wrap:wrap;">
+          <span>VAE</span>
+          <button id="vaeFilterGearBtn" type="button" aria-label="필터링 키워드 설정" style="border:none; background:none; color:var(--text-secondary); font-size:12px; padding:0; display:inline-flex; align-items:center; margin-left:2px;">
+          <i class="ti ti-settings" aria-hidden="true"></i>
+        </button>
+        <span id="vaeFilterDisplay" style="font-size:11px; color:var(--text-muted);"></span>
+        </label>
+        <div id="vaeFilterPanel" style="display:none; margin-bottom:8px; background:var(--surface-1); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px;">
+          <p style="font-size:12px; color:var(--text-secondary); margin:0 0 6px;">필터링 키워드 (VAE 경로 텍스트가 이 단어로 시작해야 목록에 표시됩니다. 콤마로 여러 개 입력 가능)</p>
+          <input type="text" id="vaeFilterInput" placeholder="예: ANIMA, ANI-V2" style="width:100%; margin-top:0;">
+          <p id="vaeFilterDefaultHint" style="font-size:11px; color:var(--text-muted); margin:6px 0 0;"></p>
+          <button id="vaeFilterDisableBtn" type="button" style="width:100%; margin-top:8px; border:0.5px dashed var(--border-strong); background:none; color:var(--text-secondary); padding:7px 0; border-radius:var(--radius); font-size:12px;">필터링 사용 안함 (전체 표시)</button>
+          <div style="display:flex; gap:8px; margin-top:10px;">
+            <button id="vaeFilterApplyBtn" type="button" style="flex:1; border:none; background:var(--fill-primary); color:var(--on-primary); padding:8px 0; border-radius:var(--radius); font-size:13px;">적용</button>
+            <button id="vaeFilterApplyBothBtn" type="button" style="flex:1; border:0.5px solid var(--border-accent); background:none; color:var(--text-accent); padding:8px 0; border-radius:var(--radius); font-size:13px;">일괄 적용</button>
+            <button id="vaeFilterCancelBtn" type="button" style="flex:1; border:0.5px solid var(--border); background:none; color:var(--text-secondary); padding:8px 0; border-radius:var(--radius); font-size:13px;">취소</button>
+          </div>
+        </div>
         <div class="searchable-select">
           <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
           <input type="hidden" id="vaeSelect">

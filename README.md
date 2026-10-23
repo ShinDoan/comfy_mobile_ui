@@ -61,7 +61,7 @@ python app.py
    - 갖고 계신 `extra_model_paths.yaml` 파일을 그대로 업로드
    - 또는 Anima/Illustrious 각각의 `base_path`만 텍스트로 직접 입력 (하위 폴더 구조는 ComfyUI 표준값을 자동으로 사용)
    - 이 경로는 CivitAI 정보 조회(해시 계산)를 위해 실제 파일을 찾는 데 쓰입니다.
-2. **LoRA/체크포인트 필터** — 파일이 너무 많다면 라벨 옆 톱니바퀴에서 이름에 포함될 키워드(기본값: Anima=`ANIMA`, IL=`IL`)를 설정해 목록을 줄일 수 있습니다.
+2. **LoRA/체크포인트/CLIP/VAE 필터** — 파일이 너무 많다면 라벨 옆 톱니바퀴에서 이름에 포함될 키워드(기본값: Anima=`ANIMA`, IL=`IL`)를 설정해 목록을 줄일 수 있습니다. CLIP/VAE도 계열별로 따로 걸러지므로, 기존에 폴더 구분 없이 두셨다면 `ANIMA\`, `IL\` 하위 폴더로 옮기거나 톱니바퀴에서 **필터링 사용 안함**을 눌러 주세요.
 
 ---
 
@@ -157,7 +157,7 @@ comfyui_mobile_ui/
 └─ data/                      # 실행 중 생성되는 로컬 데이터 (git에는 커밋하지 않는 것을 권장)
    ├─ tags.json                  # danbooru 태그 자동완성 데이터셋
    ├─ device_states.json         # 기기별 마지막 설정 기억
-   ├─ filter_settings.json       # LoRA/체크포인트 이름 필터
+   ├─ filter_settings.json       # LoRA/체크포인트/CLIP/VAE 이름 필터
    ├─ model_paths_config.json    # extra_model_paths.yaml에서 뽑은 실제 경로
    ├─ model_info_cache.json      # CivitAI 조회 캐시
    ├─ resolution_presets.json
