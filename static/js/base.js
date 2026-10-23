@@ -3377,17 +3377,28 @@ function setGenerationProgress(overallPct, stepPct) {
   bar.style.setProperty("--step", `${step}%`);
   bar.setAttribute("aria-valuenow", overall);
   const num = document.getElementById("progressOverlayNum");
-  if (num) num.textContent = `${step}% / ${overall}%`;
+  if (num) num.textContent = `${step}%`;
+  const ringStep = document.getElementById("progressRingStep");
+  if (ringStep) ringStep.style.strokeDashoffset = String(100 - step);
+  const ringOverall = document.getElementById("progressRingOverall");
+  if (ringOverall) ringOverall.style.strokeDashoffset = String(100 - overall);
+  const overallText = document.getElementById("progressRingOverallText");
+  if (overallText) overallText.textContent = `전체 ${overall}%`;
 }
 
 // 진행도 UI(바 + 미리보기 위 퍼센트)를 한꺼번에 보이거나 숨긴다.
 // PC 레이아웃의 진행도 바 위 "단계" 라벨. (모바일에서는 CSS로 숨겨져 있다)
+// 진행 링 가운데의 단계 이름도 같이 바꾼다.
 function setProgressStageLabel(stage, override) {
-  const el = document.getElementById("progressStageLabel");
-  if (!el) return;
-  if (override) { el.textContent = override; return; }
-  const hiresOn = document.getElementById("hiresEnabled").checked;
-  el.textContent = hiresOn ? (stage === "hires" ? "Hires 2 / 2 단계" : "Hires 1 / 2 단계") : "기본 생성";
+  let text = override;
+  if (!text) {
+    const hiresOn = document.getElementById("hiresEnabled").checked;
+    text = hiresOn ? (stage === "hires" ? "Hires 2 / 2 단계" : "Hires 1 / 2 단계") : "기본 생성";
+  }
+  ["progressStageLabel", "progressRingStage"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  });
 }
 
 function showProgress(labelOverride) {
@@ -3455,6 +3466,8 @@ function initUpscaleControls() {
       });
       const data = await res.json();
       if (!res.ok || data.error || !data.job_id) throw new Error(data.error || "업스케일 요청 실패");
+      externallyWatchedJobs.add(data.job_id);
+      refreshQueueSoon();
 
       for (let i = 0; i < 900; i++) {
         await new Promise((resolve) => setTimeout(resolve, 800));
@@ -3482,25 +3495,506 @@ function initUpscaleControls() {
   });
 }
 
+// ============================================================
+// 대기열 - ComfyUI 대기열을 주기적으로 받아와서
+//   · 생성 버튼 위 "중지 + 상태 블록" 줄 (블록 테두리: 위 = 현재 단계, 아래 = 전체 진행도)
+//   · 다른 작업이 돌고 있을 때 생성 버튼 테두리를 도는 빛 / 미리보기 자리의 안내 카드
+//   · 대기열 목록 (모바일: 아래에서 올라오는 시트, PC: 보조 패널)
+// 을 그린다. 중지 버튼은 짧게 누르면 현재 작업(요청 전체)만, 1초 길게 누르면 확인 후 대기열 전체를 종료한다.
+// ============================================================
+
+const queueState = { items: [], myJobs: [], ok: true, fetchedAt: 0 };
+// initGenerate 가 채워 넣는 연결고리 (내 작업 목록/포커스는 생성 쪽이 관리한다)
+const queueHooks = { onUpdate: null, hasMyJobs: () => false, adoptJob: null };
+// 업스케일처럼 다른 코드가 직접 진행도를 지켜보는 작업 (대기열 쪽에서 다시 지켜보지 않는다)
+const externallyWatchedJobs = new Set();
+let queueTimer = null;
+let queueToastTimer = null;
+
+function clampPct(v) {
+  return Math.max(0, Math.min(100, Math.round(Number(v) || 0)));
+}
+
+function formatElapsed(sec) {
+  const s = Math.max(0, Math.floor(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// 알약 모양(높이의 절반이 반지름) 테두리를 따라가는 SVG 경로들.
+// top/bottom: 왼쪽 끝점에서 시작해 위/아래 절반을 지나 오른쪽 끝점까지, loop: 왼쪽 끝점에서 시계 방향 한 바퀴.
+function pillPaths(w, h, inset) {
+  const s = inset;
+  const r = h / 2 - s;
+  const cy = h / 2;
+  const x1 = h / 2;
+  const x2 = w - h / 2;
+  return {
+    top: `M${s} ${cy} A${r} ${r} 0 0 1 ${x1} ${s} L${x2} ${s} A${r} ${r} 0 0 1 ${w - s} ${cy}`,
+    bottom: `M${s} ${cy} A${r} ${r} 0 0 0 ${x1} ${h - s} L${x2} ${h - s} A${r} ${r} 0 0 0 ${w - s} ${cy}`,
+    loop: `M${s} ${cy} A${r} ${r} 0 0 1 ${x1} ${s} L${x2} ${s} A${r} ${r} 0 0 1 ${x2} ${h - s} L${x1} ${h - s} A${r} ${r} 0 0 1 ${s} ${cy} Z`,
+  };
+}
+
+// 요소 크기가 바뀔 때마다(글자 길이, 화면 회전 등) 테두리 SVG 를 다시 맞춘다.
+function fitPillSvg(el, svg, apply) {
+  const update = () => {
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    if (!w || !h) return;
+    svg.setAttribute("width", w);
+    svg.setAttribute("height", h);
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    apply(w, h);
+  };
+  if (window.ResizeObserver) new ResizeObserver(update).observe(el);
+  update();
+}
+
+function showQueueToast(msg) {
+  const toast = document.getElementById("queueToast");
+  toast.textContent = msg;
+  toast.classList.add("show");
+  clearTimeout(queueToastTimer);
+  queueToastTimer = setTimeout(() => toast.classList.remove("show"), 2500);
+}
+
+async function refreshQueue() {
+  clearTimeout(queueTimer);
+  try {
+    const res = await fetch("/api/queue", { cache: "no-store" });
+    if (res.ok) {
+      const data = await res.json();
+      queueState.items = data.items || [];
+      queueState.myJobs = data.my_jobs || [];
+      queueState.ok = data.ok !== false;
+      queueState.fetchedAt = Date.now();
+      if (queueHooks.adoptJob) queueState.myJobs.forEach((id) => queueHooks.adoptJob(id));
+    }
+  } catch (_) {
+    /* 다음 주기에 다시 시도한다 */
+  }
+  if (queueHooks.onUpdate) queueHooks.onUpdate();
+  renderQueueUI();
+  const busy = queueState.items.length > 0 || queueHooks.hasMyJobs();
+  queueTimer = setTimeout(refreshQueue, document.hidden ? 5000 : busy ? 1000 : 3000);
+}
+
+function refreshQueueSoon() {
+  clearTimeout(queueTimer);
+  queueTimer = setTimeout(refreshQueue, 150);
+}
+
+function queueSourceTag(item) {
+  if (item.source === "mine") return { text: "이 기기", cls: "mine" };
+  if (item.source === "app") return { text: "다른 기기", cls: "" };
+  return { text: "ComfyUI", cls: "ext" };
+}
+
+function queueStageLabel(item) {
+  if (item.kind === "upscale") return "업스케일";
+  const summary = item.summary || {};
+  if (!summary.hires) return "기본 생성";
+  return item.progress && item.progress.stage === "hires" ? "Hires 2 / 2 단계" : "Hires 1 / 2 단계";
+}
+
+function queueMetaParts(item) {
+  const summary = item.summary || {};
+  const parts = [];
+  if (summary.size) parts.push(summary.size);
+  if (summary.hires) parts.push(summary.hires_scale ? `Hires ×${summary.hires_scale}` : "Hires");
+  if (summary.batch) parts.push(summary.batch);
+  if (item.preparing) parts.push("다음 장 준비 중");
+  if (item.source === "comfyui") parts.push("진행도 표시 안 됨");
+  return parts;
+}
+
+function renderQueueUI() {
+  const items = queueState.items;
+  const running = items.find((it) => it.running);
+  const waiting = items.filter((it) => !it.running);
+  const active = items.length > 0;
+  const mineActive = queueHooks.hasMyJobs() || items.some((it) => it.source === "mine");
+
+  document.getElementById("queueRow").hidden = !active;
+  document.body.classList.toggle("queue-active", active);
+
+  const chip = document.getElementById("queueChip");
+  let text;
+  if (running && running.source === "mine") {
+    text = `내 작업 생성 중 · 대기 ${waiting.length}건`;
+  } else if (running) {
+    const elapsed = (running.elapsed || 0) + (Date.now() - queueState.fetchedAt) / 1000;
+    text = `ComfyUI 작업 중 · 대기 ${waiting.length}건 · ${formatElapsed(elapsed)}`;
+  } else {
+    text = `대기열 ${items.length}건 · 준비 중`;
+  }
+  document.getElementById("queueChipText").textContent = text;
+  const prog = running && running.progress;
+  chip.classList.toggle("indeterminate", !prog);
+  const step = prog ? clampPct(prog.step) : 0;
+  const overall = prog ? clampPct(prog.overall) : 0;
+  chip.querySelector(".chip-arc-step").style.strokeDashoffset = prog ? String(100 - step) : "";
+  chip.querySelector(".chip-arc-overall").style.strokeDashoffset = String(100 - overall);
+  chip.setAttribute("aria-label", `${text}${prog ? `, 현재 단계 ${step}%, 전체 ${overall}%` : ""}. 누르면 대기열 목록이 열립니다`);
+
+  const genBtn = document.getElementById("genBtn");
+  document.getElementById("genBtnWrap").classList.toggle("glowing", active && !mineActive);
+  genBtn.textContent = !active ? "생성" : mineActive ? "대기열에 추가" : `생성 (대기열 ${items.length + 1}번째)`;
+
+  const resultImage = document.getElementById("resultImage");
+  const busyCard = document.getElementById("queueBusyCard");
+  const isPlaceholder = !resultImage.querySelector("img");
+  const showBusy = !!running && !mineActive && isPlaceholder;
+  busyCard.hidden = !showBusy;
+  if (showBusy) {
+    const summary = running.summary || {};
+    document.getElementById("queueBusyTitle").textContent = [summary.title, summary.size].filter(Boolean).join(" · ");
+    document.getElementById("queueBusyPrompt").textContent = summary.prompt || "";
+  }
+
+  if (document.getElementById("queuePanel").classList.contains("open")) renderQueueList();
+}
+
+function renderQueueList() {
+  const list = document.getElementById("queueList");
+  const items = queueState.items;
+  const running = items.filter((it) => it.running);
+  const waiting = items.filter((it) => !it.running);
+  document.getElementById("queuePanelSub").textContent = items.length
+    ? `실행 ${running.length}건 · 대기 ${waiting.length}건`
+    : "";
+
+  list.innerHTML = "";
+  if (!queueState.ok) {
+    const warn = document.createElement("div");
+    warn.className = "queue-empty";
+    warn.textContent = "ComfyUI에 연결할 수 없습니다";
+    list.appendChild(warn);
+    return;
+  }
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "queue-empty";
+    empty.textContent = "대기열이 비어 있습니다";
+    list.appendChild(empty);
+    return;
+  }
+
+  const el = (tag, cls, txt) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (txt != null) node.textContent = txt;
+    return node;
+  };
+  const itemBody = (item) => {
+    const summary = item.summary || {};
+    const body = el("div", "queue-item-body");
+    body.appendChild(el("span", "queue-item-title", summary.title || (item.kind === "upscale" ? "업스케일" : "작업")));
+    if (summary.prompt) body.appendChild(el("span", "queue-item-prompt", summary.prompt));
+    const tags = el("div", "queue-item-tags");
+    const src = queueSourceTag(item);
+    tags.appendChild(el("span", `queue-tag ${src.cls}`, src.text));
+    const meta = queueMetaParts(item);
+    if (meta.length) tags.appendChild(el("span", "", meta.join(" · ")));
+    body.appendChild(tags);
+    return body;
+  };
+
+  if (running.length) list.appendChild(el("span", "queue-section-label", "지금 실행 중"));
+  running.forEach((item) => {
+    const card = el("div", "queue-running-card");
+    const head = el("div", "queue-running-head");
+    head.appendChild(itemBody(item));
+    const stopBtn = el("button", "queue-running-stop", "중지");
+    stopBtn.type = "button";
+    stopBtn.addEventListener("click", stopCurrentQueueJob);
+    head.appendChild(stopBtn);
+    card.appendChild(head);
+
+    if (item.progress) {
+      const step = clampPct(item.progress.step);
+      const overall = clampPct(item.progress.overall);
+      const stepLabel = el("div", "queue-bar-label");
+      stepLabel.appendChild(el("b", "", queueStageLabel(item)));
+      stepLabel.appendChild(el("span", "", `${step}%`));
+      const stepBar = el("div", "queue-bar step");
+      const stepFill = el("i");
+      stepFill.style.width = `${step}%`;
+      stepBar.appendChild(stepFill);
+      const allLabel = el("div", "queue-bar-label");
+      allLabel.appendChild(el("span", "", "전체"));
+      allLabel.appendChild(el("span", "", `${overall}%`));
+      const allBar = el("div", "queue-bar overall");
+      const allFill = el("i");
+      allFill.style.width = `${overall}%`;
+      allBar.appendChild(allFill);
+      card.append(stepLabel, stepBar, allLabel, allBar);
+    } else {
+      const label = el("div", "queue-bar-label");
+      label.appendChild(el("span", "", `진행 중 · ${formatElapsed(item.elapsed || 0)} 경과`));
+      const bar = el("div", "queue-bar indeterminate");
+      bar.appendChild(el("i"));
+      card.append(label, bar);
+    }
+    list.appendChild(card);
+  });
+
+  if (waiting.length) list.appendChild(el("span", "queue-section-label", "대기 중"));
+  waiting.forEach((item, idx) => {
+    const pos = running.length + idx + 1;
+    const row = el("div", `queue-pending-row${item.source === "mine" ? " mine" : ""}`);
+    row.appendChild(el("span", "queue-pos", String(pos)));
+    row.appendChild(itemBody(item));
+    const cancel = el("button", "queue-cancel-btn", "✕");
+    cancel.type = "button";
+    cancel.setAttribute("aria-label", `${pos}번 작업 취소`);
+    cancel.addEventListener("click", async () => {
+      cancel.disabled = true;
+      try {
+        await fetch("/api/queue/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(item.job_id ? { job_id: item.job_id } : { prompt_id: item.prompt_id }),
+        });
+        showQueueToast(`${pos}번 작업을 취소했습니다`);
+      } catch (_) {
+        showQueueToast("작업을 취소하지 못했습니다");
+      }
+      refreshQueueSoon();
+    });
+    row.appendChild(cancel);
+    list.appendChild(row);
+  });
+}
+
+async function stopCurrentQueueJob() {
+  const hasWaiting = queueState.items.some((it) => !it.running);
+  try {
+    await fetch("/api/queue/stop-current", { method: "POST" });
+    showQueueToast(hasWaiting ? "현재 작업을 중지했습니다 · 다음 대기 작업이 이어서 진행됩니다" : "현재 작업을 중지했습니다");
+  } catch (_) {
+    showQueueToast("중지 요청을 보내지 못했습니다");
+  }
+  refreshQueueSoon();
+}
+
+// 짧게 누르기 / 길게 누르기(0.25초부터 판정, 1초에 완료) 공용. 길게 누르는 동안 테두리를 따라 빨간 선이 한 바퀴 돈다.
+// 판정 이후 1초 전에 손을 떼거나 버튼 밖으로 나가면 아무 일도 하지 않는다.
+function attachLongPress(btn, { onShort, onLong, hint }) {
+  const HOLD = 1000;
+  const LONG_START = 250;
+  const ring = btn.querySelector(".press-ring path");
+  let start = 0;
+  let raf = 0;
+  let active = false;
+
+  const setRing = (g) => {
+    if (ring) ring.style.strokeDashoffset = String(100 - g * 100);
+  };
+  const reset = () => {
+    active = false;
+    cancelAnimationFrame(raf);
+    setRing(0);
+    if (hint) hint.hidden = true;
+  };
+  const tick = () => {
+    if (!active) return;
+    const t = performance.now() - start;
+    if (t >= LONG_START) {
+      if (hint) hint.hidden = false;
+      setRing(Math.min(1, (t - LONG_START) / (HOLD - LONG_START)));
+    }
+    if (t >= HOLD) {
+      reset();
+      onLong();
+      return;
+    }
+    raf = requestAnimationFrame(tick);
+  };
+
+  btn.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    // 터치는 기본으로 버튼에 포인터가 붙잡혀서 손가락이 밖으로 나가도 pointerleave 가 오지 않으므로 풀어준다.
+    try {
+      btn.releasePointerCapture(e.pointerId);
+    } catch (_) {}
+    active = true;
+    start = performance.now();
+    raf = requestAnimationFrame(tick);
+  });
+  btn.addEventListener("pointerup", () => {
+    if (!active) return;
+    const t = performance.now() - start;
+    reset();
+    if (t < LONG_START) onShort();
+  });
+  btn.addEventListener("pointerleave", () => {
+    if (active) reset();
+  });
+  btn.addEventListener("pointercancel", reset);
+  btn.addEventListener("contextmenu", (e) => e.preventDefault());
+  // 키보드(Enter/Space)로 누른 경우는 짧게 누른 것으로 처리한다.
+  btn.addEventListener("click", (e) => {
+    if (e.detail === 0) onShort();
+  });
+
+  if (ring) {
+    ring.setAttribute("pathLength", "100");
+    fitPillSvg(btn, btn.querySelector(".press-ring"), (w, h) => {
+      ring.setAttribute("d", pillPaths(w, h, 1.5).loop);
+    });
+  }
+}
+
+function openQueueConfirm() {
+  const running = queueState.items.filter((it) => it.running).length;
+  const waiting = queueState.items.length - running;
+  document.getElementById("queueConfirmDesc").textContent =
+    `실행 중인 작업 ${running}건과 대기 중인 작업 ${waiting}건이 모두 취소됩니다. 이미 완성된 이미지는 그대로 남습니다.`;
+  document.getElementById("queueConfirm").hidden = false;
+  document.getElementById("queueConfirmCancel").focus();
+}
+
+function closeQueueConfirm() {
+  document.getElementById("queueConfirm").hidden = true;
+}
+
+function openQueuePanel() {
+  renderQueueList();
+  document.getElementById("queueBackdrop").classList.add("open");
+  document.getElementById("queuePanel").classList.add("open");
+  document.getElementById("queueChip").setAttribute("aria-expanded", "true");
+  document.documentElement.classList.add("scroll-locked");
+  document.body.classList.add("scroll-locked");
+}
+
+function closeQueuePanel() {
+  document.getElementById("queueBackdrop").classList.remove("open");
+  document.getElementById("queuePanel").classList.remove("open");
+  document.getElementById("queueChip").setAttribute("aria-expanded", "false");
+  document.documentElement.classList.remove("scroll-locked");
+  document.body.classList.remove("scroll-locked");
+}
+
+function initQueue() {
+  const chip = document.getElementById("queueChip");
+  const chipSvg = chip.querySelector(".queue-chip-ring");
+  chipSvg.querySelectorAll(".chip-arc").forEach((p) => p.setAttribute("pathLength", "100"));
+  fitPillSvg(chip, chipSvg, (w, h) => {
+    const arcs = pillPaths(w, h, 1.5);
+    chipSvg.querySelector(".chip-track").setAttribute("d", pillPaths(w, h, 0.75).loop);
+    chipSvg.querySelector(".chip-arc-step").setAttribute("d", arcs.top);
+    chipSvg.querySelector(".chip-arc-overall").setAttribute("d", arcs.bottom);
+  });
+  chip.setAttribute("aria-expanded", "false");
+  chip.addEventListener("click", () => {
+    if (document.getElementById("queuePanel").classList.contains("open")) closeQueuePanel();
+    else openQueuePanel();
+  });
+
+  attachLongPress(document.getElementById("queueStopBtn"), {
+    onShort: stopCurrentQueueJob,
+    onLong: openQueueConfirm,
+    hint: document.getElementById("queueStopHint"),
+  });
+  attachLongPress(document.getElementById("queueClearBtn"), {
+    onShort: () => showQueueToast("1초 동안 길게 누르면 대기열 전체를 종료합니다"),
+    onLong: openQueueConfirm,
+  });
+
+  document.getElementById("queueCloseBtn").addEventListener("click", closeQueuePanel);
+  document.getElementById("queueBackdrop").addEventListener("click", closeQueuePanel);
+  document.getElementById("queueConfirmCancel").addEventListener("click", closeQueueConfirm);
+  document.getElementById("queueConfirmOk").addEventListener("click", async () => {
+    closeQueueConfirm();
+    try {
+      await fetch("/api/queue/clear", { method: "POST" });
+      showQueueToast("대기열을 모두 종료했습니다");
+    } catch (_) {
+      showQueueToast("대기열을 종료하지 못했습니다");
+    }
+    refreshQueueSoon();
+  });
+  document.getElementById("queueConfirm").addEventListener("click", (e) => {
+    if (e.target.id === "queueConfirm") closeQueueConfirm();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (!document.getElementById("queueConfirm").hidden) closeQueueConfirm();
+    else if (document.getElementById("queuePanel").classList.contains("open")) closeQueuePanel();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshQueueSoon();
+  });
+
+  refreshQueue();
+}
+
 function initGenerate(seedApi) {
   const resultImage = document.getElementById("resultImage");
   const resultStatus = document.getElementById("resultStatus");
-  const progressTrack = document.getElementById("progressTrack");
   const genBtn = document.getElementById("genBtn");
   const widthInput = document.getElementById("widthInput");
   const heightInput = document.getElementById("heightInput");
 
-  let currentJobId = null;
-  let running = false;
-
-  function setRunningUI(isRunning) {
-    running = isRunning;
-    genBtn.textContent = isRunning ? "중지" : "생성";
-    genBtn.classList.toggle("stop-mode", isRunning);
-  }
+  // 이 화면이 지켜보는 내 작업들 (jobId -> { width, height }). 생성 버튼은 누를 때마다 새 작업을
+  // 대기열에 넣고, 미리보기/진행 링은 그중 "포커스된" 작업 하나만 그린다.
+  const watchers = new Map();
+  let focusedJobId = null;
 
   // 생성 중 블러 연출 on/off. 지금은 기본값 off로 두고, 토글 버튼은 나중에 추가한다.
   let resultBlurEffectEnabled = false;
+
+  // ComfyUI 에서 지금 실행 중인 내 작업이 있으면 그것을, 없으면 지금 보던 작업(또는 가장 먼저 넣은 작업)을 그린다.
+  function chooseFocus() {
+    const runningMine = queueState.items.find((it) => it.running && it.job_id && watchers.has(it.job_id));
+    if (runningMine) return runningMine.job_id;
+    if (focusedJobId && watchers.has(focusedJobId)) return focusedJobId;
+    return watchers.size ? watchers.keys().next().value : null;
+  }
+
+  function refreshFocus() {
+    const next = chooseFocus();
+    if (next === focusedJobId) return;
+    focusedJobId = next;
+    if (!next) return;
+    const info = watchers.get(next) || {};
+    if (info.width && info.height) resultImage.style.aspectRatio = `${info.width} / ${info.height}`;
+    // 이전 이미지가 hires였다면 그 전환 버튼이 새로 생성 중인 이미지 위에 남아있으면 안 되므로 숨긴다.
+    document.getElementById("preHiresToggleBtn").style.display = "none";
+    currentPreHiresUrl = null;
+    viewingPreHires = false;
+    showProgress();
+    setGenerationProgress(0, 0);
+  }
+
+  function startWatching(jobId, info) {
+    if (watchers.has(jobId)) {
+      Object.assign(watchers.get(jobId), info || {});
+      return;
+    }
+    watchers.set(jobId, info || {});
+    refreshFocus();
+    renderQueueUI();
+    pollJob(jobId)
+      .catch((err) => {
+        if (jobId === focusedJobId || watchers.size === 1) resultStatus.textContent = "오류: " + err.message;
+      })
+      .finally(() => {
+        watchers.delete(jobId);
+        if (focusedJobId === jobId) focusedJobId = null;
+        refreshFocus();
+        if (!watchers.size) hideProgress();
+        refreshQueueSoon();
+      });
+  }
+
+  queueHooks.onUpdate = refreshFocus;
+  queueHooks.hasMyJobs = () => watchers.size > 0;
+  queueHooks.adoptJob = (jobId) => {
+    // 새로고침 등으로 화면을 다시 열었을 때, 서버에서 아직 진행 중인 내 작업을 다시 지켜본다.
+    if (!watchers.has(jobId) && !externallyWatchedJobs.has(jobId)) startWatching(jobId, {});
+  };
 
   async function pollJob(jobId) {
     let lastCompleted = 0;
@@ -3508,34 +4002,61 @@ function initGenerate(seedApi) {
     let requestedPreviewUrl = "";
     let previewEpoch = 0; // 한 장이 끝날 때마다 올려서, 늦게 도착한 이전 미리보기를 무시한다
     let maxStepSeen = 0; // 노드가 바뀌면서 step이 0으로 리셋되어도, 블러가 도로 풀리지 않도록 최고값만 추적
-    for (let i = 0; i < 3600; i++) {
+    let wasFocused = false;
+    for (let i = 0; i < 9000; i++) {
       await new Promise((resolve) => setTimeout(resolve, 800));
       const statusRes = await fetch(`/api/generate/${encodeURIComponent(jobId)}`);
+      if (statusRes.status === 404) return; // 서버가 재시작되어 작업 기록이 사라진 경우
       if (!statusRes.ok) continue;
       const status = await statusRes.json();
       const total = status.total || 1;
       const completed = status.completed || 0;
+      const focused = jobId === focusedJobId;
+      if (focused && !wasFocused) {
+        // 다른 작업을 그리다가 이 작업으로 넘어온 경우: 미리보기를 다시 받아온다.
+        requestedPreviewUrl = "";
+        previewShown = false;
+        maxStepSeen = 0;
+      }
+      wasFocused = focused;
 
-      renderBatchDots(completed, total);
-      setGenerationProgress(status.overall != null ? status.overall : 0, status.step);
-      setProgressStageLabel(status.stage);
-      resultStatus.textContent =
-        (status.status === "stopped" ? "중지 중 · " : "") +
-        `${completed} / ${total} 생성 · 브라우저를 닫아도 서버에서 계속 진행됩니다`;
+      if (completed > lastCompleted) {
+        lastCompleted = completed;
+        previewEpoch++;
+        await loadGeneratedImages();
+        previewShown = false;
+        maxStepSeen = 0;
+      }
+
+      const finished = status.status === "completed" || status.status === "stopped" || status.status === "error";
+      if (focused) {
+        // 앞의 작업이 끝나기를 기다리는 중이면 0% 대신 "대기 중 · N번째"를 보여준다.
+        const queueIdx = queueState.items.findIndex((it) => it.job_id === jobId);
+        const waiting = queueIdx >= 0 && !queueState.items[queueIdx].running;
+        renderBatchDots(completed, total);
+        setGenerationProgress(status.overall != null ? status.overall : 0, status.step);
+        setProgressStageLabel(status.stage, waiting ? `대기 중 · ${queueIdx + 1}번째` : status.kind === "upscale" ? "업스케일" : null);
+        if (!finished) {
+          const others = watchers.size - 1;
+          resultStatus.textContent =
+            `${completed} / ${total} 생성` + (others > 0 ? ` · 내 대기 ${others}건` : "") +
+            " · 브라우저를 닫아도 서버에서 계속 진행됩니다";
+        }
+      }
 
       // hires 사용 시: base 단계 이미지가 완성되는 즉시 미리보기로 보여주고,
       // hires 진행도가 올라갈수록 블러를 점점 없애서 서서히 선명해지는 느낌을 준다.
       // 이미지마다 미리보기 주소가 다르므로, 처음 보는 주소일 때만 한 번 불러온다.
       // 이미지를 먼저 내려받아 성공했을 때만 화면에 올리고(실패하면 기존 화면 유지 + 최대 3번 재시도),
-      // 그 사이 한 장이 끝났다면(epoch 변경) 늦게 도착한 미리보기는 버린다.
-      if (status.preview_url && status.preview_url !== requestedPreviewUrl) {
+      // 그 사이 한 장이 끝났거나(epoch 변경) 다른 작업으로 포커스가 넘어갔다면 늦게 도착한 미리보기는 버린다.
+      if (focused && status.preview_url && status.preview_url !== requestedPreviewUrl) {
         requestedPreviewUrl = status.preview_url;
         const epoch = previewEpoch;
         const url = status.preview_url;
         const tryLoad = (attempt) => {
           const probe = new Image();
           probe.onload = () => {
-            if (epoch !== previewEpoch) return;
+            if (epoch !== previewEpoch || jobId !== focusedJobId) return;
             resultImage.innerHTML = "";
             const previewImg = document.createElement("img");
             previewImg.id = "hiresPreviewImg";
@@ -3554,7 +4075,7 @@ function initGenerate(seedApi) {
         };
         tryLoad(0);
       }
-      if (previewShown) {
+      if (focused && previewShown) {
         const previewImg = document.getElementById("hiresPreviewImg");
         if (previewImg) {
           if (!resultBlurEffectEnabled) {
@@ -3576,7 +4097,7 @@ function initGenerate(seedApi) {
             previewImg.style.filter = "none";
           }
         }
-      } else if (resultBlurEffectEnabled && status.status !== "completed" && status.status !== "stopped" && status.status !== "error") {
+      } else if (focused && resultBlurEffectEnabled && !finished) {
         // hires 가 아닌 일반 생성 중에는, 아직 화면에 남아있는 이전 이미지 위에
         // 진행률이 올라갈수록 블러를 점점 강하게 걸어서 "새 이미지가 만들어지고
         // 있다"는 느낌을 준다. 최종 블러 강도는 hires 시작 블러와 동일한 16px.
@@ -3593,23 +4114,14 @@ function initGenerate(seedApi) {
         }
       }
 
-      if (completed > lastCompleted) {
-        lastCompleted = completed;
-        previewEpoch++;
-        await loadGeneratedImages();
-        previewShown = false;
-        maxStepSeen = 0;
-      }
-
+      const showFinal = focused || watchers.size === 1;
       if (status.status === "completed") {
-        hideProgress();
-        resultStatus.textContent = `${total} / ${total} 생성 완료`;
+        if (showFinal) resultStatus.textContent = `${total} / ${total} 생성 완료`;
         return;
       }
       if (status.status === "stopped") {
         previewEpoch++;
-        hideProgress();
-        resultStatus.textContent = `중지됨 · ${completed} / ${total} 생성됨`;
+        if (showFinal) resultStatus.textContent = `중지됨 · ${completed} / ${total} 생성됨`;
         return;
       }
       if (status.status === "error") {
@@ -3621,16 +4133,7 @@ function initGenerate(seedApi) {
   }
 
   genBtn.addEventListener("click", async () => {
-    if (running) {
-      // 중지 버튼으로 눌린 경우: 남은 배치를 중단하고 ComfyUI 현재 작업도 즉시 인터럽트
-      genBtn.disabled = true;
-      resultStatus.textContent = "중지하는 중...";
-      try {
-        if (currentJobId) await fetch(`/api/generate/${encodeURIComponent(currentJobId)}/stop`, { method: "POST" });
-      } catch (_) {}
-      genBtn.disabled = false;
-      return;
-    }
+    if (genBtn.disabled) return;
 
     if (seedApi.randomizeSeed.checked) {
       const old = seedApi.seedInput.value;
@@ -3644,34 +4147,28 @@ function initGenerate(seedApi) {
     // 생성 직전에 두 프롬프트 모두 textarea 값을 강제로 최신화한다.
     Object.values(promptPillControllers).forEach((c) => c.syncToTextarea());
 
-    resultImage.style.aspectRatio = `${widthInput.value} / ${heightInput.value}`;
-    // 이전 이미지가 hires였다면 그 전환 버튼이 새로 생성 중인 이미지 위에 남아있으면 안 되므로 숨긴다.
-    document.getElementById("preHiresToggleBtn").style.display = "none";
-    currentPreHiresUrl = null;
-    viewingPreHires = false;
-    showProgress();
-    setGenerationProgress(0, 0);
-    resultStatus.textContent = "생성 중 · 브라우저를 닫아도 서버에서 계속 생성됩니다";
-    setRunningUI(true);
-
+    const state = collectState();
+    const queuedAhead = queueState.items.length; // 내 작업 앞에 이미 있던 작업 수
+    // 연타로 같은 요청이 여러 번 들어가지 않도록 요청이 끝날 때까지만 잠깐 막는다.
+    genBtn.disabled = true;
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(collectState()),
+        body: JSON.stringify(state),
       });
       const data = await res.json();
       if (!res.ok || data.error || !data.job_id) {
         throw new Error(data.error || "생성 요청 실패");
       }
-      currentJobId = data.job_id;
-      await pollJob(currentJobId);
+      startWatching(data.job_id, { width: widthInput.value, height: heightInput.value });
+      if (queuedAhead > 0) showQueueToast(`대기열에 추가했습니다 · ${queuedAhead + 1}번째`);
+      if (data.job_id === focusedJobId) resultStatus.textContent = "생성 중 · 브라우저를 닫아도 서버에서 계속 생성됩니다";
+      refreshQueueSoon();
     } catch (err) {
       resultStatus.textContent = "오류: " + err.message;
-      hideProgress();
     } finally {
-      setRunningUI(false);
-      currentJobId = null;
+      genBtn.disabled = false;
     }
   });
 }
@@ -4012,6 +4509,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initSharedPreviewToggle();
   const seedApi = initSeedControls();
   initGenerate(seedApi);
+  initQueue();
   loadGeneratedImages();
   initScrollThumb();
   initAutosave();

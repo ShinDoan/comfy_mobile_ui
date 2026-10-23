@@ -407,6 +407,41 @@ margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 �
     </div>
 
     <div id="tagToast" class="tag-toast"></div>
+    <div id="queueToast" class="tag-toast queue-toast" role="status" aria-live="polite"></div>
+
+    <div id="queueBackdrop" class="tag-overlay-backdrop"></div>
+    <div id="queuePanel" class="tag-overlay-panel" role="dialog" aria-modal="true" aria-labelledby="queuePanelTitle">
+      <div class="tag-overlay-handle"></div>
+      <div class="tag-overlay-header">
+        <div class="queue-panel-heading">
+          <span id="queuePanelTitle">대기열</span>
+          <span id="queuePanelSub" class="queue-panel-sub"></span>
+        </div>
+        <button id="queueCloseBtn" type="button" aria-label="닫기" class="tag-overlay-close">✕</button>
+      </div>
+      <div id="queueList" class="queue-list"></div>
+      <div class="queue-panel-foot">
+        <button id="queueClearBtn" type="button" class="queue-clear-btn" aria-label="대기열 전체 종료 (1초 동안 길게 누르기)">
+          <svg class="press-ring" aria-hidden="true"><path></path></svg>
+          <span class="queue-stop-icon" aria-hidden="true"></span>대기열 전체 종료
+        </button>
+        <span class="queue-panel-hint">1초 동안 길게 누르면 확인 창이 열립니다</span>
+      </div>
+    </div>
+
+    <div id="queueConfirm" class="queue-confirm" hidden>
+      <div class="queue-confirm-box" role="alertdialog" aria-modal="true" aria-labelledby="queueConfirmTitle" aria-describedby="queueConfirmDesc">
+        <div class="queue-confirm-head">
+          <span class="queue-confirm-icon" aria-hidden="true"><span class="queue-stop-icon"></span></span>
+          <span id="queueConfirmTitle">대기열 전체를 종료할까요?</span>
+        </div>
+        <p id="queueConfirmDesc"></p>
+        <div class="queue-confirm-actions">
+          <button id="queueConfirmCancel" type="button" class="queue-confirm-cancel">취소</button>
+          <button id="queueConfirmOk" type="button" class="queue-confirm-ok">전체 종료</button>
+        </div>
+      </div>
+    </div>
 
     <div id="pathPickerBackdrop" class="tag-overlay-backdrop"></div>
     <div id="pathPickerPanel" class="tag-overlay-panel">
@@ -582,7 +617,32 @@ margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 �
         <div class="result-stage">
           <div id="resultImage" class="result-image-placeholder">이미지 미리보기</div>
           <div id="progressOverlay" class="progress-overlay" hidden aria-hidden="true">
-            <div class="progress-pill"><b id="progressOverlayNum">0% / 0%</b><span>현재 / 전체</span></div>
+            <!-- 동심원 진행 링: 바깥 = 전체, 안쪽 = 현재 단계 (12시 방향에서 시계 방향으로 찬다) -->
+            <div class="progress-rings">
+              <svg viewBox="0 0 168 168" aria-hidden="true">
+                <circle class="ring-disc" cx="84" cy="84" r="58"></circle>
+                <circle class="ring-track ring-track-overall" cx="84" cy="84" r="76"></circle>
+                <circle id="progressRingOverall" class="ring-arc ring-arc-overall" cx="84" cy="84" r="76" pathLength="100" transform="rotate(-90 84 84)"></circle>
+                <circle class="ring-track ring-track-step" cx="84" cy="84" r="64"></circle>
+                <circle id="progressRingStep" class="ring-arc ring-arc-step" cx="84" cy="84" r="64" pathLength="100" transform="rotate(-90 84 84)"></circle>
+              </svg>
+              <div class="progress-rings-text">
+                <span id="progressRingStage" class="ring-stage"></span>
+                <b id="progressOverlayNum">0%</b>
+                <span id="progressRingOverallText" class="ring-overall">전체 0%</span>
+              </div>
+            </div>
+          </div>
+          <!-- 다른 기기/ComfyUI 의 작업이 돌고 있고, 내 작업도 표시할 이미지도 없을 때 -->
+          <div id="queueBusyCard" class="queue-busy-card" hidden>
+            <div class="queue-busy-msg">
+              <b>ComfyUI에서 다른 작업을 생성하고 있어요</b>
+              <span>지금 생성을 누르면 대기열 뒤에 이어서 진행됩니다</span>
+            </div>
+            <div class="queue-busy-meta">
+              <span id="queueBusyTitle"></span>
+              <span id="queueBusyPrompt"></span>
+            </div>
           </div>
         </div>
         <button id="preHiresToggleBtn" class="delete-image-btn" style="left:8px; right:auto; display:none;" type="button" aria-label="hires 이전 이미지로 전환">
@@ -637,7 +697,29 @@ margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 �
 
   <div class="floating-area">
     <div class="floating-inner">
-      <button id="genBtn" type="button">생성</button>
+      <!-- 대기열이 있을 때만 보이는 줄: 중지(짧게 = 현재 작업, 1초 길게 = 전체 종료) + 상태 블록(누르면 대기열 목록) -->
+      <div id="queueRow" class="queue-row" hidden>
+        <div class="queue-stop-wrap">
+          <span id="queueStopHint" class="queue-stop-hint" hidden>계속 누르면 대기열 전체 종료</span>
+          <button id="queueStopBtn" type="button" class="queue-stop-btn" aria-label="중지 (짧게 누르면 현재 작업, 1초 동안 길게 누르면 대기열 전체 종료)">
+            <svg class="press-ring" aria-hidden="true"><path></path></svg>
+            <span class="queue-stop-icon" aria-hidden="true"></span>중지
+          </button>
+        </div>
+        <button id="queueChip" type="button" class="queue-chip" aria-haspopup="dialog" aria-controls="queuePanel">
+          <svg class="queue-chip-ring" aria-hidden="true">
+            <path class="chip-track"></path>
+            <path class="chip-arc chip-arc-step"></path>
+            <path class="chip-arc chip-arc-overall"></path>
+          </svg>
+          <span class="queue-chip-dot" aria-hidden="true"></span>
+          <span id="queueChipText">대기열</span>
+        </button>
+      </div>
+      <div id="genBtnWrap" class="gen-btn-wrap">
+        <span class="gen-btn-glow" aria-hidden="true"></span>
+        <button id="genBtn" type="button">생성</button>
+      </div>
     </div>
   </div>
 

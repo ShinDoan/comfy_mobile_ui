@@ -1443,10 +1443,13 @@ def generate_one_image(job_id, data):
     return save_generated_image(img_bytes, image_info, data, pre_hires_bytes=pre_hires_bytes)
 
 
-def interrupt_comfyui():
-    """지금 ComfyUI에서 실행 중인 작업을 즉시 중단시킨다."""
+def interrupt_comfyui(prompt_id=None):
+    """지금 ComfyUI에서 실행 중인 작업을 즉시 중단시킨다.
+    prompt_id 를 주면 그 작업이 실행 중일 때만 중단한다 (최신 ComfyUI 기준, 구버전은 무시하고 현재 작업을 중단)."""
     try:
-        req = urllib.request.Request(f"{COMFY_URL}/interrupt", data=b"", method="POST")
+        body = json.dumps({"prompt_id": prompt_id}).encode("utf-8") if prompt_id else b""
+        headers = {"Content-Type": "application/json"} if prompt_id else {}
+        req = urllib.request.Request(f"{COMFY_URL}/interrupt", data=body, headers=headers, method="POST")
         urllib.request.urlopen(req, timeout=5)
     except Exception as e:
         print(f"[WARN] ComfyUI 중단 요청 실패: {e}")
@@ -1486,10 +1489,10 @@ def build_upscale_prompt(uploaded_filename, model_name):
 
 def run_upscale_job(job_id, source_item, model_name):
     with generation_jobs_lock:
-        generation_jobs[job_id] = {
+        generation_jobs.setdefault(job_id, {}).update({
             "status": "running", "total": 1, "completed": 0,
             "overall": 0, "step": 0, "images": [], "stop_requested": False,
-        }
+        })
     try:
         src_path = os.path.join(IMAGE_DIR, source_item.get("filename", ""))
         with open(src_path, "rb") as f:
@@ -1510,10 +1513,14 @@ def run_upscale_job(job_id, source_item, model_name):
             generation_jobs[job_id]["completed"] = 1
             generation_jobs[job_id]["status"] = "completed"
     except Exception as e:
-        print(f"[ERROR] 업스케일 작업 {job_id}: {e}")
         with generation_jobs_lock:
-            generation_jobs[job_id]["status"] = "error"
-            generation_jobs[job_id]["error"] = str(e)
+            job = generation_jobs[job_id]
+            if job.get("stop_requested"):
+                job["status"] = "stopped"
+            else:
+                print(f"[ERROR] 업스케일 작업 {job_id}: {e}")
+                job["status"] = "error"
+                job["error"] = str(e)
 
 
 def run_batch_job(job_id, data):
@@ -1528,7 +1535,11 @@ def run_batch_job(job_id, data):
         base_seed = 0
 
     with generation_jobs_lock:
-        generation_jobs[job_id] = {
+        job = generation_jobs.setdefault(job_id, {})
+        if job.get("stop_requested"):  # 시작도 전에 대기열에서 취소된 경우
+            job["status"] = "stopped"
+            return
+        job.update({
             "status": "running",
             "total": total,
             "completed": 0,
@@ -1536,7 +1547,7 @@ def run_batch_job(job_id, data):
             "step": 0,
             "images": [],
             "stop_requested": False,
-        }
+        })
 
     for i in range(total):
         with generation_jobs_lock:
@@ -1639,6 +1650,7 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
     nodes_started = 0
     deadline = time.time() + MAX_WAIT_SECONDS
     last_history_check = 0.0
+    missing_checks = 0  # history 에도 대기열에도 없는 상태가 연속으로 확인된 횟수
     if ws is not None:
         ws.settimeout(2.0)
 
@@ -1648,6 +1660,13 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
                 generation_jobs[job_id].update(kv)
 
     while time.time() < deadline:
+        # 대기열에서 취소/중지된 작업: 실행 중이었다면 인터럽트를, 대기 중이었다면 대기열 삭제를
+        # 요청한 쪽에서 이미 보냈으므로 여기서는 기다리기만 멈추면 된다.
+        with generation_jobs_lock:
+            stop = (generation_jobs.get(job_id) or {}).get("stop_requested")
+        if stop:
+            raise ComfyError("사용자가 작업을 중지했습니다.")
+
         raw = None
         if ws is not None:
             try:
@@ -1722,18 +1741,43 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
                     raise ComfyError(err)
                 set_job(overall=100, step=100)
                 return
+            # ComfyUI 화면 등 다른 곳에서 대기열을 비우면 history 에도 남지 않으므로
+            # 여기서 끝없이 기다리게 된다. 대기열에서도 사라졌으면 삭제된 것으로 본다.
+            ids = comfy_queue_prompt_ids()
+            if ids is not None and prompt_id not in ids[0] and prompt_id not in ids[1]:
+                missing_checks += 1
+                if missing_checks >= 2:
+                    raise ComfyError("ComfyUI 대기열에서 작업이 삭제되었습니다.")
+            else:
+                missing_checks = 0
 
     raise ComfyError("생성 시간이 초과되었습니다 (ComfyUI 응답 없음).")
+
+
+def generation_summary(data):
+    """대기열 목록에 보여줄 요약 정보 (모델, 프롬프트 앞부분, 해상도)."""
+    hires = data.get("hires") or {}
+    return {
+        "title": str(data.get("checkpoint") or ""),
+        "prompt": str(data.get("positivePrompt") or "")[:200],
+        "size": f"{data.get('width')}×{data.get('height')}" if data.get("width") and data.get("height") else "",
+        "hires": bool(hires.get("enabled")),
+        "hires_scale": hires.get("scaleBy"),
+    }
 
 
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
     data = request.get_json(silent=True) or {}
+    device_id, is_new = get_device_id()
     job_id = uuid.uuid4().hex
     with generation_jobs_lock:
-        generation_jobs[job_id] = {"status": "queued", "total": max(1, int(data.get("batch", 1))), "completed": 0, "images": []}
+        generation_jobs[job_id] = {
+            "status": "queued", "total": max(1, int(data.get("batch", 1))), "completed": 0, "images": [],
+            "kind": "generate", "device_id": device_id, "created": time.time(), "summary": generation_summary(data),
+        }
     threading.Thread(target=run_batch_job, args=(job_id, data), daemon=True).start()
-    return jsonify({"job_id": job_id, "status": "queued"})
+    return with_cookie(jsonify({"job_id": job_id, "status": "queued"}), device_id, is_new)
 
 @app.route("/api/generate/<job_id>")
 def api_generate_status(job_id):
@@ -1771,6 +1815,187 @@ def api_generate_stop(job_id):
     interrupt_comfyui()
     return jsonify({"ok": True})
 
+# ---------- 대기열 ----------
+# ComfyUI 대기열(/queue)을 기준으로, 이 앱이 넣은 작업(어느 기기에서 넣었는지, 진행도)과
+# ComfyUI 화면 등에서 직접 넣은 작업을 함께 보여주고 취소/중지한다.
+
+queue_first_seen = {}  # prompt_id -> 실행 중으로 처음 확인한 시각 (경과 시간 표시용)
+queue_first_seen_lock = threading.Lock()
+ACTIVE_JOB_STATUSES = ("queued", "running")
+
+
+def fetch_comfy_queue():
+    return comfy_request_json(f"{COMFY_URL}/queue", timeout=5)
+
+
+def comfy_queue_prompt_ids():
+    """(실행 중 prompt_id 집합, 대기 중 prompt_id 집합). ComfyUI 에 연결하지 못하면 None."""
+    try:
+        q = fetch_comfy_queue()
+    except Exception:
+        return None
+    running = {e[1] for e in q.get("queue_running") or [] if len(e) > 1}
+    pending = {e[1] for e in q.get("queue_pending") or [] if len(e) > 1}
+    return running, pending
+
+
+def comfy_post_queue(payload):
+    """ComfyUI /queue 에 삭제/비우기 요청을 보낸다 (응답 본문이 비어 있어서 JSON 으로 읽지 않는다)."""
+    req = urllib.request.Request(f"{COMFY_URL}/queue", data=json.dumps(payload).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    urllib.request.urlopen(req, timeout=5).close()
+
+
+def delete_from_comfy_queue(prompt_ids):
+    try:
+        comfy_post_queue({"delete": list(prompt_ids)})
+    except Exception as e:
+        print(f"[WARN] ComfyUI 대기열 삭제 실패: {e}")
+
+
+def summarize_prompt_graph(prompt):
+    """ComfyUI 에서 직접 넣은 작업의 워크플로우에서 모델/프롬프트/해상도를 최대한 뽑아낸다."""
+    title = text = ""
+    width = height = None
+    for node in (prompt or {}).values():
+        if not isinstance(node, dict):
+            continue
+        ct, inp = node.get("class_type"), node.get("inputs") or {}
+        if not title and ct in ("UNETLoader", "CheckpointLoaderSimple"):
+            title = str(inp.get("unet_name") or inp.get("ckpt_name") or "")
+        elif ct == "CLIPTextEncode" and not text and isinstance(inp.get("text"), str):
+            text = inp["text"]
+        elif ct in ("EmptyLatentImage", "EmptySD3LatentImage") and width is None:
+            if isinstance(inp.get("width"), int) and isinstance(inp.get("height"), int):
+                width, height = inp["width"], inp["height"]
+    return {
+        "title": title or "ComfyUI 워크플로우",
+        "prompt": text[:200],
+        "size": f"{width}×{height}" if width else "",
+        "hires": False,
+    }
+
+
+def active_jobs_snapshot():
+    with generation_jobs_lock:
+        return {jid: dict(job) for jid, job in generation_jobs.items() if job.get("status") in ACTIVE_JOB_STATUSES}
+
+
+def job_queue_fields(job_id, job, device_id):
+    total = job.get("total") or 1
+    summary = dict(job.get("summary") or {})
+    if total > 1:
+        summary["batch"] = f"{min(job.get('completed', 0) + 1, total)} / {total}장"
+    return {
+        "job_id": job_id,
+        "kind": job.get("kind", "generate"),
+        "source": "mine" if job.get("device_id") == device_id else "app",
+        "summary": summary,
+    }
+
+
+@app.route("/api/queue")
+def api_queue():
+    device_id, is_new = get_device_id()
+    try:
+        q = fetch_comfy_queue()
+        ok = True
+    except Exception:
+        q, ok = {}, False
+    running_raw = [e for e in q.get("queue_running") or [] if len(e) > 1]
+    pending_raw = sorted((e for e in q.get("queue_pending") or [] if len(e) > 1), key=lambda e: e[0])
+
+    jobs = active_jobs_snapshot()
+    by_prompt = {job["prompt_id"]: (jid, job) for jid, job in jobs.items() if job.get("prompt_id")}
+    now = time.time()
+    running_ids = {e[1] for e in running_raw}
+    with queue_first_seen_lock:
+        for pid in list(queue_first_seen):
+            if pid not in running_ids:
+                del queue_first_seen[pid]
+        for pid in running_ids:
+            queue_first_seen.setdefault(pid, now)
+        first_seen = dict(queue_first_seen)
+
+    items, listed_jobs = [], set()
+    for raw, running in [(e, True) for e in running_raw] + [(e, False) for e in pending_raw]:
+        pid = raw[1]
+        item = {"prompt_id": pid, "running": running}
+        jid, job = by_prompt.get(pid, (None, None))
+        if job:
+            listed_jobs.add(jid)
+            item.update(job_queue_fields(jid, job, device_id))
+            if running:
+                item["progress"] = {"step": job.get("step", 0), "overall": job.get("overall", 0), "stage": job.get("stage")}
+        else:
+            item.update({"source": "comfyui", "summary": summarize_prompt_graph(raw[2] if len(raw) > 2 else {})})
+        if running:
+            item["elapsed"] = round(now - first_seen.get(pid, now))
+        items.append(item)
+
+    # 배치의 다음 장을 아직 ComfyUI 에 넣기 전(장과 장 사이)이거나 막 요청된 작업도 목록에 남겨둔다.
+    # (취소/중지 요청을 받아 곧 끝날 작업은 빼고)
+    for jid, job in sorted(jobs.items(), key=lambda kv: kv[1].get("created", 0)):
+        if jid not in listed_jobs and not job.get("stop_requested"):
+            item = {"prompt_id": None, "running": False, "preparing": True}
+            item.update(job_queue_fields(jid, job, device_id))
+            items.append(item)
+
+    my_jobs = [jid for jid, job in sorted(jobs.items(), key=lambda kv: kv[1].get("created", 0))
+               if job.get("device_id") == device_id]
+    return with_cookie(jsonify({"ok": ok, "items": items, "my_jobs": my_jobs}), device_id, is_new)
+
+
+@app.route("/api/queue/stop-current", methods=["POST"])
+def api_queue_stop_current():
+    """중지 버튼을 짧게 눌렀을 때: 지금 실행 중인 작업을 멈춘다.
+    이 앱이 넣은 작업이면 그 요청(배치)의 남은 장도 더 넣지 않는다. 대기 중인 다른 작업은 그대로 진행된다."""
+    ids = comfy_queue_prompt_ids()
+    running = ids[0] if ids else set()
+    with generation_jobs_lock:
+        for job in generation_jobs.values():
+            if job.get("status") in ACTIVE_JOB_STATUSES and job.get("prompt_id") in running:
+                job["stop_requested"] = True
+    interrupt_comfyui(next(iter(running)) if len(running) == 1 else None)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/queue/cancel", methods=["POST"])
+def api_queue_cancel():
+    """대기열 목록의 ✕: 작업 하나를 취소한다. 앱 작업(job_id)이면 요청 전체를, 아니면 그 prompt 만 취소."""
+    payload = request.get_json(silent=True) or {}
+    job_id, prompt_id = payload.get("job_id"), payload.get("prompt_id")
+    if job_id:
+        with generation_jobs_lock:
+            job = generation_jobs.get(job_id)
+            if not job:
+                return jsonify({"error": "작업을 찾을 수 없습니다."}), 404
+            job["stop_requested"] = True
+            prompt_id = job.get("prompt_id")
+    if prompt_id:
+        ids = comfy_queue_prompt_ids()
+        if ids and prompt_id in ids[0]:
+            interrupt_comfyui(prompt_id)
+        elif ids and prompt_id in ids[1]:
+            delete_from_comfy_queue([prompt_id])
+    return jsonify({"ok": True})
+
+
+@app.route("/api/queue/clear", methods=["POST"])
+def api_queue_clear():
+    """중지 버튼을 1초 길게 누른 뒤 확인: 실행 중인 작업과 대기 중인 작업을 모두 종료한다."""
+    with generation_jobs_lock:
+        for job in generation_jobs.values():
+            if job.get("status") in ACTIVE_JOB_STATUSES:
+                job["stop_requested"] = True
+    try:
+        comfy_post_queue({"clear": True})
+    except Exception as e:
+        print(f"[WARN] ComfyUI 대기열 비우기 실패: {e}")
+    interrupt_comfyui()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/upscale", methods=["POST"])
 def api_upscale():
     payload = request.get_json(silent=True) or {}
@@ -1783,11 +2008,16 @@ def api_upscale():
     if not source_item:
         return jsonify({"error": "원본 이미지를 찾을 수 없습니다."}), 404
 
+    device_id, is_new = get_device_id()
     job_id = uuid.uuid4().hex
     with generation_jobs_lock:
-        generation_jobs[job_id] = {"status": "queued", "total": 1, "completed": 0, "images": []}
+        generation_jobs[job_id] = {
+            "status": "queued", "total": 1, "completed": 0, "images": [],
+            "kind": "upscale", "device_id": device_id, "created": time.time(),
+            "summary": {"title": "업스케일", "prompt": str(model_name), "size": "", "hires": False},
+        }
     threading.Thread(target=run_upscale_job, args=(job_id, source_item, model_name), daemon=True).start()
-    return jsonify({"job_id": job_id, "status": "queued"})
+    return with_cookie(jsonify({"job_id": job_id, "status": "queued"}), device_id, is_new)
 
 TAG_DATA = []
 
