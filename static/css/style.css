@@ -1466,7 +1466,7 @@ body.scroll-locked {
   }
 
   /* 모델 설정: 라벨 + 경로설정/초기화 한 줄, 그 아래 Anima|Illustrious.
-     왼쪽 패널과 같은 너비로 상단 바 끝까지 채우고, 오른쪽 경계선을 패널 경계선과 이어지게 한다 */
+     왼쪽 패널과 같은 너비로 상단 바 끝까지 채운다 (체크포인트 선택과의 사이에는 경계선을 두지 않는다) */
   .pc-topbar > .pc-modelset {
     width: var(--pc-left);
     box-sizing: border-box;
@@ -1475,7 +1475,6 @@ body.scroll-locked {
     /* 상단 바의 padding(10px 20px)을 상쇄하고, 오른쪽은 gap(14px)과 합쳐 20px 띄운다 */
     margin: -10px 6px -10px -20px;
     padding: 10px 16px;
-    border-right: 0.5px solid var(--border-strong);
     display: grid;
     grid-template-columns: 1fr auto;
     align-content: end;
