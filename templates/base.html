@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>기본 생성 - ComfyUI Mobile UI</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="stylesheet" href="{{ asset_url('css/style.css') }}">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 </head>
 <body>
@@ -721,7 +721,7 @@ margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 �
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='js/base.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/pc_layout.js') }}"></script>
+  <script src="{{ asset_url('js/base.js') }}"></script>
+  <script src="{{ asset_url('js/pc_layout.js') }}"></script>
 </body>
 </html>

@@ -3,7 +3,7 @@ import base64, hashlib, json, os, socket, threading, time, urllib.error, urllib.
 from datetime import datetime, timezone
 import yaml
 import websocket
-from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask import Flask, jsonify, render_template, request, send_from_directory, url_for
 
 app = Flask(__name__)
 
@@ -138,9 +138,23 @@ def with_cookie(resp, device_id, is_new):
         resp.set_cookie("device_id", device_id, max_age=COOKIE_MAX_AGE, samesite="Lax")
     return resp
 
+@app.context_processor
+def asset_helpers():
+    def asset_url(filename):
+        """정적 파일 주소에 수정 시각을 붙인다. 업데이트 후에도 브라우저가 예전 JS/CSS 를 계속 쓰는 일을 막는다."""
+        try:
+            version = int(os.path.getmtime(os.path.join(app.static_folder, filename)))
+        except OSError:
+            version = 0
+        return url_for("static", filename=filename, v=version)
+    return {"asset_url": asset_url}
+
+
 @app.route("/")
 def base_page():
-    return render_template("base.html")
+    resp = app.make_response(render_template("base.html"))
+    resp.headers["Cache-Control"] = "no-cache"  # 페이지는 항상 새로 확인 (정적 파일 버전이 여기에 들어 있다)
+    return resp
 
 @app.route("/api/state", methods=["GET"])
 def get_state():
