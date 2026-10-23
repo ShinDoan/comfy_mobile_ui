@@ -1629,13 +1629,29 @@ def open_progress_socket(client_id):
         return None
 
 
+_last_comfy_warn = {}
+
+
+def warn_throttled(key, msg, interval=60):
+    """같은 종류의 경고는 interval 초에 한 번만 출력한다 (주기적 확인에서 일시적인 끊김이 반복될 때 로그가 넘치지 않게)."""
+    now = time.time()
+    if now - _last_comfy_warn.get(key, 0) >= interval:
+        _last_comfy_warn[key] = now
+        print(msg)
+
+
 def get_history_entry(prompt_id):
-    """/history/{prompt_id} 의 항목을 반환 (아직 없으면 None)."""
-    try:
-        history = comfy_request_json(f"{COMFY_URL}/history/{urllib.parse.quote(prompt_id)}", timeout=10)
-    except Exception as e:
-        print(f"[WARN] history 조회 실패: {e}")
-        return None
+    """/history/{prompt_id} 의 항목을 반환 (아직 없거나 조회에 실패하면 None).
+    바쁜 ComfyUI 가 연결을 끊는 경우(WinError 10054 등)가 있어 한 번 더 시도하고, 그래도 안 되면 다음 확인 때 다시 본다."""
+    for attempt in range(2):
+        try:
+            history = comfy_request_json(f"{COMFY_URL}/history/{urllib.parse.quote(prompt_id)}", timeout=10)
+            break
+        except Exception as e:
+            if attempt == 1:
+                warn_throttled("history", f"[WARN] history 조회 실패 (다음 확인 때 다시 시도합니다): {e}")
+                return None
+            time.sleep(0.5)
     entry = history.get(prompt_id) if isinstance(history, dict) else None
     return entry or None
 
@@ -1759,24 +1775,26 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
             elif etype == "execution_interrupted" and pid == prompt_id:
                 raise ComfyError("ComfyUI 작업이 중단되었습니다.")
 
-        # 웹소켓 이벤트를 놓쳤더라도 history 에 기록이 생기면 완료로 본다.
+        # 웹소켓 이벤트를 놓쳤을 때를 대비한 확인. 아직 대기열(실행/대기)에 있으면 웹소켓이 완료를
+        # 알려주므로 history 는 묻지 않는다 (ComfyUI 부담을 줄이기 위해). 대기열에서 빠졌을 때만
+        # history 를 보고, history 에도 없으면 ComfyUI 화면 등에서 삭제된 것으로 본다.
         now = time.time()
-        if now - last_history_check >= 3:
+        if now - last_history_check >= (5 if ws is not None else 3):
             last_history_check = now
-            entry = get_history_entry(prompt_id)
-            if entry:
-                err = history_error_message(entry)
-                if err:
-                    raise ComfyError(err)
-                set_job(overall=100, step=100)
-                return
-            # ComfyUI 화면 등 다른 곳에서 대기열을 비우면 history 에도 남지 않으므로
-            # 여기서 끝없이 기다리게 된다. 대기열에서도 사라졌으면 삭제된 것으로 본다.
             ids = comfy_queue_prompt_ids()
-            if ids is not None and prompt_id not in ids[0] and prompt_id not in ids[1]:
-                missing_checks += 1
-                if missing_checks >= 2:
-                    raise ComfyError("ComfyUI 대기열에서 작업이 삭제되었습니다.")
+            in_queue = ids is not None and (prompt_id in ids[0] or prompt_id in ids[1])
+            if not in_queue:
+                entry = get_history_entry(prompt_id)
+                if entry:
+                    err = history_error_message(entry)
+                    if err:
+                        raise ComfyError(err)
+                    set_job(overall=100, step=100)
+                    return
+                if ids is not None:
+                    missing_checks += 1
+                    if missing_checks >= 2:
+                        raise ComfyError("ComfyUI 대기열에서 작업이 삭제되었습니다.")
             else:
                 missing_checks = 0
 
@@ -1853,15 +1871,33 @@ queue_first_seen_lock = threading.Lock()
 ACTIVE_JOB_STATUSES = ("queued", "running")
 
 
-def fetch_comfy_queue():
-    return comfy_request_json(f"{COMFY_URL}/queue", timeout=5)
+# 열린 화면 수 × 1초, 작업 수 × 몇 초마다 ComfyUI 에 /queue 를 따로따로 물으면 바쁜 ComfyUI 가
+# 연결을 끊기도 한다. 짧은 시간 동안은 한 번 받아온 결과를 모두가 같이 쓴다.
+QUEUE_CACHE_SECONDS = 1.0
+_queue_cache = {"time": 0.0, "data": None}
+_queue_cache_lock = threading.Lock()
 
 
-def comfy_queue_prompt_ids():
+def fetch_comfy_queue(max_age=QUEUE_CACHE_SECONDS):
+    with _queue_cache_lock:  # 동시에 여러 요청이 와도 ComfyUI 에는 한 번만 묻는다
+        if _queue_cache["data"] is not None and time.time() - _queue_cache["time"] < max_age:
+            return _queue_cache["data"]
+        data = comfy_request_json(f"{COMFY_URL}/queue", timeout=5)
+        _queue_cache.update(time=time.time(), data=data)
+        return data
+
+
+def invalidate_queue_cache():
+    with _queue_cache_lock:
+        _queue_cache["time"] = 0.0
+
+
+def comfy_queue_prompt_ids(max_age=QUEUE_CACHE_SECONDS):
     """(실행 중 prompt_id 집합, 대기 중 prompt_id 집합). ComfyUI 에 연결하지 못하면 None."""
     try:
-        q = fetch_comfy_queue()
-    except Exception:
+        q = fetch_comfy_queue(max_age)
+    except Exception as e:
+        warn_throttled("queue", f"[WARN] ComfyUI 대기열 조회 실패 (다음 확인 때 다시 시도합니다): {e}")
         return None
     running = {e[1] for e in q.get("queue_running") or [] if len(e) > 1}
     pending = {e[1] for e in q.get("queue_pending") or [] if len(e) > 1}
@@ -1872,7 +1908,10 @@ def comfy_post_queue(payload):
     """ComfyUI /queue 에 삭제/비우기 요청을 보낸다 (응답 본문이 비어 있어서 JSON 으로 읽지 않는다)."""
     req = urllib.request.Request(f"{COMFY_URL}/queue", data=json.dumps(payload).encode("utf-8"),
                                  headers={"Content-Type": "application/json"}, method="POST")
-    urllib.request.urlopen(req, timeout=5).close()
+    try:
+        urllib.request.urlopen(req, timeout=5).close()
+    finally:
+        invalidate_queue_cache()
 
 
 def find_submitted_prompt(prompt_id, client_id):
@@ -1881,7 +1920,7 @@ def find_submitted_prompt(prompt_id, client_id):
     def same_client(entry):
         return len(entry) > 3 and isinstance(entry[3], dict) and entry[3].get("client_id") == client_id
     try:
-        q = fetch_comfy_queue()
+        q = fetch_comfy_queue(max_age=0)
         for entry in (q.get("queue_running") or []) + (q.get("queue_pending") or []):
             if len(entry) > 1 and (entry[1] == prompt_id or same_client(entry)):
                 return entry[1]
@@ -2006,7 +2045,7 @@ def api_queue():
 def api_queue_stop_current():
     """중지 버튼을 짧게 눌렀을 때: 지금 실행 중인 작업을 멈춘다.
     이 앱이 넣은 작업이면 그 요청(배치)의 남은 장도 더 넣지 않는다. 대기 중인 다른 작업은 그대로 진행된다."""
-    ids = comfy_queue_prompt_ids()
+    ids = comfy_queue_prompt_ids(max_age=0)
     running = ids[0] if ids else set()
     with generation_jobs_lock:
         for job in generation_jobs.values():
@@ -2029,7 +2068,7 @@ def api_queue_cancel():
             job["stop_requested"] = True
             prompt_id = job.get("prompt_id")
     if prompt_id:
-        ids = comfy_queue_prompt_ids()
+        ids = comfy_queue_prompt_ids(max_age=0)
         if ids and prompt_id in ids[0]:
             interrupt_comfyui(prompt_id)
         elif ids and prompt_id in ids[1]:
