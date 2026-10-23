@@ -11,9 +11,11 @@
 
   <div class="page">
 
-    <div class="section">
+    <!-- ===== 상단 모델 바 (모바일: 세로로 그대로 쌓임 / PC: 한 줄 가로 바) ===== -->
+    <div class="pc-topbar">
+    <div class="section pc-modelset">
       <div class="label-row" style="margin-bottom:10px;">
-        <p class="section-title" style="margin:0;">기본 생성</p>
+        <p class="section-title" style="margin:0;"><span class="t-m">기본 생성</span><span class="t-pc">모델 설정</span></p>
         <div style="display:flex; gap:14px; align-items:center;">
           <button id="modelPathsSettingsToggle" type="button" style="border:none; background:none; color: var(--text-secondary); font-size:12px; padding:2px 0; display:flex; align-items:center; gap:4px;">
             <i class="ti ti-settings" aria-hidden="true" style="font-size:14px;"></i>경로 설정
@@ -56,7 +58,7 @@
       <button id="modelPathsBaseApplyBtn" type="button" style="width:100%; margin-top:8px; border:none; background:var(--fill-primary); color:var(--on-primary); border-radius:var(--radius); padding:9px 0; font-size:13px;">입력한 경로 적용</button>
     </div>
 
-    <div class="section">
+    <div class="section pc-ckpt">
       <label class="label" id="ckptLabel" style="display:flex; align-items:baseline; gap:6px; flex-wrap:wrap;">
         <span id="ckptLabelText">UNET 모델</span>
         <button id="ckptFilterGearBtn" type="button" aria-label="필터링 키워드 설정" style="border:none; background:none; color:var(--text-secondary); font-size:12px; padding:0; display:inline-flex; align-items:center; margin-left:2px;">
@@ -65,7 +67,8 @@
         <span id="ckptFilterDisplay" style="font-size:11px; color:var(--text-muted);"></span>
       </label>
       <div id="ckptFilterPanel" style="display:none; margin-bottom:8px; background:var(--surface-1); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px;">
-        <p style="font-size:12px; color:var(--text-secondary); margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 시작해야 목록에 표시됩니다. 콤마로 여러 개 입력 가능)</p>
+        <p style="font-size:12px; color:var(--text-secondary); 
+margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 시작해야 목록에 표시됩니다. 콤마로 여러 개 입력 가능)</p>
         <input type="text" id="ckptFilterInput" placeholder="예: ANIMA, ANI-V2" style="width:100%; margin-top:0;">
         <p id="ckptFilterDefaultHint" style="font-size:11px; color:var(--text-muted); margin:6px 0 0;"></p>
         <button id="ckptFilterDisableBtn" type="button" style="width:100%; margin-top:8px; border:0.5px dashed var(--border-strong); background:none; color:var(--text-secondary); padding:7px 0; border-radius:var(--radius); font-size:12px;">필터링 사용 안함 (전체 표시)</button>
@@ -87,7 +90,7 @@
       </div>
     </div>
 
-    <div class="section">
+    <div class="section pc-clipvae">
       <div id="animaClipRow" style="margin-bottom:10px;">
         <label class="label">CLIP 모델</label>
         <div class="searchable-select">
@@ -96,7 +99,7 @@
           <div class="searchable-dropdown"></div>
         </div>
       </div>
-      <div>
+      <div class="pc-vae">
         <label class="label" id="vaeLabel">VAE</label>
         <div class="searchable-select">
           <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
@@ -114,7 +117,10 @@
         </div>
       </div>
     </div>
+    </div>
 
+    <!-- ===== 설정 패널 (PC: 왼쪽 컬럼, 스크롤) ===== -->
+    <div class="pc-left">
     <div class="section">
       <div class="label-row">
         <label class="label" style="display:flex; align-items:baseline; gap:6px; flex-wrap:wrap;">
@@ -190,6 +196,166 @@
       </div>
     </div>
 
+    <div class="section">
+      <div class="label-row" style="margin-bottom:6px;">
+        <label class="label" style="margin:0;">해상도 / 배치</label>
+        <button id="resPresetBtn" type="button" style="border:none; background:none; color:var(--text-accent); font-size:12px; padding:0;">해상도 프리셋</button>
+      </div>
+      <div class="res-grid">
+        <div>
+          <label class="label">너비</label>
+          <input type="number" id="widthInput" value="960" step="8">
+        </div>
+        <button type="button" id="resSwapBtn" aria-label="가로/세로 전환" style="border:none; background:none; color:var(--text-secondary); width:24px; height:36px; display:flex; align-items:center; justify-content:center; flex-shrink:0; padding:0; align-self:end; justify-self:center;">
+          <i class="ti ti-arrows-left-right" aria-hidden="true" style="font-size:15px;"></i>
+        </button>
+        <div>
+          <label class="label">높이</label>
+          <input type="number" id="heightInput" value="1280" step="8">
+        </div>
+        <div>
+          <label class="label">배치</label>
+          <div class="seed-controls" style="gap:4px;">
+            <button class="icon-btn" id="batchMinus" aria-label="배치 감소" type="button" style="width:26px; height:32px; flex-shrink:0;">−</button>
+            <input type="text" id="batchInput" value="1" style="padding:8px 2px; height:32px;">
+            <button class="icon-btn" id="batchPlus" aria-label="배치 증가" type="button" style="width:26px; height:32px; flex-shrink:0;">+</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section pc-region">
+      <div class="label-row" style="margin-bottom:6px;">
+        <label id="regionSectionLabel" class="label" style="margin:0; cursor:pointer; display:flex; align-items:center; gap:4px;">
+          영역별 프롬프트 <i class="ti ti-chevron-down" id="regionSectionChevron" aria-hidden="true" style="font-size:13px; transform:rotate(-90deg);"></i>
+        </label>
+        <button id="addRegionBtn" type="button" class="tag-search-btn">+ 영역 추가</button>
+      </div>
+      <div id="regionSectionBody" style="display:none;">
+        <button type="button" class="pc-only pc-panel-close" data-pc-close="region" aria-label="패널 닫기">✕</button>
+        <div id="regionCanvas" style="position:relative; width:100%; max-width:280px; margin:0 auto; background:var(--surface-1); border:0.5px solid var(--border); border-radius:8px; overflow:hidden; touch-action:none;"></div>
+        <div id="regionList" style="margin-top:10px; display:flex; flex-direction:column; gap:8px;"></div>
+      </div>
+    </div>
+
+    <div class="section" style="display:flex; flex-direction:column; gap:10px;">
+      <div class="two-col">
+        <div>
+          <label class="label">샘플러</label>
+          <div class="searchable-select">
+            <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+            <input type="hidden" id="samplerSelect">
+            <div class="searchable-dropdown"></div>
+          </div>
+        </div>
+        <div>
+          <label class="label">스케줄러</label>
+          <div class="searchable-select">
+            <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+            <input type="hidden" id="schedulerSelect">
+            <div class="searchable-dropdown"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="slider-row">
+        <div class="label-row">
+          <label class="label">스텝</label>
+          <span class="slider-out" id="stepsOut">24</span>
+        </div>
+        <input type="range" id="stepsRange" min="1" max="150" value="24">
+      </div>
+
+      <div class="slider-row">
+        <div class="label-row">
+          <label class="label">CFG</label>
+          <span class="slider-out" id="cfgOut">5.0</span>
+        </div>
+        <input type="range" id="cfgRange" min="1" max="15" step="0.5" value="5">
+      </div>
+
+      <div>
+        <div class="label-row">
+          <label class="label">시드</label>
+          <label class="randomize-label">
+            <input type="checkbox" id="randomizeSeed"> 랜덤
+          </label>
+        </div>
+        <div class="seed-controls">
+          <button class="icon-btn" id="seedMinus" aria-label="시드 감소" type="button">−</button>
+          <input type="text" id="seedInput" value="622366776744325">
+          <button class="icon-btn" id="seedPlus" aria-label="시드 증가" type="button">+</button>
+          <button class="icon-btn" id="seedUndo" aria-label="이전 시드로 되돌리기" type="button" disabled>↺</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section pc-hires">
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;">
+        <input type="checkbox" id="hiresEnabled" style="width:16px; height:16px;">
+        Hires 사용
+      </label>
+      <button type="button" id="hiresPanelBtn" class="lora-text-btn pc-only" hidden style="font-size:12px; color: var(--text-accent);">설정 열기 ▸</button>
+
+      <div id="hiresBody" class="pc-side-hidden" style="display:none; flex-direction:column; gap:10px; margin-top:12px;">
+        <button type="button" class="pc-only pc-panel-close" data-pc-close="hires" aria-label="패널 닫기">✕</button>
+        <div>
+          <label class="label">확대 방법</label>
+          <div class="searchable-select">
+            <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+            <input type="hidden" id="hiresUpscaleMethodSelect">
+            <div class="searchable-dropdown"></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="label-row"><label class="label">확대 배율</label><span class="slider-out" id="hiresScaleOut">1.25</span></div>
+          <input type="range" id="hiresScaleRange" min="1" max="4" step="0.05" value="1.25">
+        </div>
+
+        <div>
+          <div class="label-row"><label class="label">스텝</label><span class="slider-out" id="hiresStepsOut">20</span></div>
+          <input type="range" id="hiresStepsRange" min="1" max="150" value="20">
+        </div>
+
+        <div>
+          <div class="label-row"><label class="label">노이즈 제거 양</label><span class="slider-out" id="hiresDenoiseOut">0.45</span></div>
+          <input type="range" id="hiresDenoiseRange" min="0" max="1" step="0.01" value="0.45">
+        </div>
+
+        <div>
+          <div class="label-row" style="margin-bottom:4px;">
+            <button type="button" id="hiresAdvancedToggle" class="lora-text-btn" style="font-size:12px; padding:2px 0;">고급</button>
+          </div>
+          <p id="hiresAdvancedSummary" style="font-size:11px; color: var(--text-muted); margin:0 0 8px;"></p>
+          <div id="hiresAdvancedPanel" style="display:none; flex-direction:column; gap:8px;">
+            <div>
+              <div class="label-row"><label class="label">CFG</label><span class="slider-out" id="hiresCfgOut"></span></div>
+              <input type="range" id="hiresCfgRange" min="1" max="30" step="0.5" value="5">
+            </div>
+            <div>
+              <label class="label">샘플러</label>
+              <div class="searchable-select">
+                <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+                <input type="hidden" id="hiresSamplerSelect">
+                <div class="searchable-dropdown"></div>
+              </div>
+            </div>
+            <div>
+              <label class="label">스케줄러</label>
+              <div class="searchable-select">
+                <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
+                <input type="hidden" id="hiresSchedulerSelect">
+                <div class="searchable-dropdown"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- ===== 오버레이 (모바일: 바텀시트 / PC: 왼쪽 패널과 이미지 영역 사이 보조 패널) ===== -->
     <div id="tagOverlayBackdrop" class="tag-overlay-backdrop"></div>
     <div id="tagOverlayPanel" class="tag-overlay-panel">
       <div class="tag-overlay-handle"></div>
@@ -346,47 +512,6 @@
       </div>
     </div>
 
-    <div class="section">
-      <div class="label-row" style="margin-bottom:6px;">
-        <label class="label" style="margin:0;">해상도 / 배치</label>
-        <button id="resPresetBtn" type="button" style="border:none; background:none; color:var(--text-accent); font-size:12px; padding:0;">해상도 프리셋</button>
-      </div>
-      <div class="res-grid">
-        <div>
-          <label class="label">너비</label>
-          <input type="number" id="widthInput" value="960" step="8">
-        </div>
-        <button type="button" id="resSwapBtn" aria-label="가로/세로 전환" style="border:none; background:none; color:var(--text-secondary); width:24px; height:36px; display:flex; align-items:center; justify-content:center; flex-shrink:0; padding:0; align-self:end; justify-self:center;">
-          <i class="ti ti-arrows-left-right" aria-hidden="true" style="font-size:15px;"></i>
-        </button>
-        <div>
-          <label class="label">높이</label>
-          <input type="number" id="heightInput" value="1280" step="8">
-        </div>
-        <div>
-          <label class="label">배치</label>
-          <div class="seed-controls" style="gap:4px;">
-            <button class="icon-btn" id="batchMinus" aria-label="배치 감소" type="button" style="width:26px; height:32px; flex-shrink:0;">−</button>
-            <input type="text" id="batchInput" value="1" style="padding:8px 2px; height:32px;">
-            <button class="icon-btn" id="batchPlus" aria-label="배치 증가" type="button" style="width:26px; height:32px; flex-shrink:0;">+</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="label-row" style="margin-bottom:6px;">
-        <label id="regionSectionLabel" class="label" style="margin:0; cursor:pointer; display:flex; align-items:center; gap:4px;">
-          영역별 프롬프트 <i class="ti ti-chevron-down" id="regionSectionChevron" aria-hidden="true" style="font-size:13px; transform:rotate(-90deg);"></i>
-        </label>
-        <button id="addRegionBtn" type="button" class="tag-search-btn">+ 영역 추가</button>
-      </div>
-      <div id="regionSectionBody" style="display:none;">
-        <div id="regionCanvas" style="position:relative; width:100%; max-width:280px; margin:0 auto; background:var(--surface-1); border:0.5px solid var(--border); border-radius:8px; overflow:hidden; touch-action:none;"></div>
-        <div id="regionList" style="margin-top:10px; display:flex; flex-direction:column; gap:8px;"></div>
-      </div>
-    </div>
-
     <div id="resPresetBackdrop" class="tag-overlay-backdrop"></div>
     <div id="resPresetPanel" class="tag-overlay-panel">
       <div class="tag-overlay-handle"></div>
@@ -412,119 +537,6 @@
       <div id="resPresetList" style="flex:1; min-height:0; overflow-y:auto; padding:0 14px 16px; display:flex; flex-direction:column; gap:8px;"></div>
     </div>
 
-    <div class="section" style="display:flex; flex-direction:column; gap:10px;">
-      <div class="two-col">
-        <div>
-          <label class="label">샘플러</label>
-          <div class="searchable-select">
-            <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
-            <input type="hidden" id="samplerSelect">
-            <div class="searchable-dropdown"></div>
-          </div>
-        </div>
-        <div>
-          <label class="label">스케줄러</label>
-          <div class="searchable-select">
-            <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
-            <input type="hidden" id="schedulerSelect">
-            <div class="searchable-dropdown"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="slider-row">
-        <div class="label-row">
-          <label class="label">스텝</label>
-          <span class="slider-out" id="stepsOut">24</span>
-        </div>
-        <input type="range" id="stepsRange" min="1" max="150" value="24">
-      </div>
-
-      <div class="slider-row">
-        <div class="label-row">
-          <label class="label">CFG</label>
-          <span class="slider-out" id="cfgOut">5.0</span>
-        </div>
-        <input type="range" id="cfgRange" min="1" max="15" step="0.5" value="5">
-      </div>
-
-      <div>
-        <div class="label-row">
-          <label class="label">시드</label>
-          <label class="randomize-label">
-            <input type="checkbox" id="randomizeSeed"> 랜덤
-          </label>
-        </div>
-        <div class="seed-controls">
-          <button class="icon-btn" id="seedMinus" aria-label="시드 감소" type="button">−</button>
-          <input type="text" id="seedInput" value="622366776744325">
-          <button class="icon-btn" id="seedPlus" aria-label="시드 증가" type="button">+</button>
-          <button class="icon-btn" id="seedUndo" aria-label="이전 시드로 되돌리기" type="button" disabled>↺</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;">
-        <input type="checkbox" id="hiresEnabled" style="width:16px; height:16px;">
-        Hires 사용
-      </label>
-
-      <div id="hiresBody" style="display:none; flex-direction:column; gap:10px; margin-top:12px;">
-        <div>
-          <label class="label">확대 방법</label>
-          <div class="searchable-select">
-            <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
-            <input type="hidden" id="hiresUpscaleMethodSelect">
-            <div class="searchable-dropdown"></div>
-          </div>
-        </div>
-
-        <div>
-          <div class="label-row"><label class="label">확대 배율</label><span class="slider-out" id="hiresScaleOut">1.25</span></div>
-          <input type="range" id="hiresScaleRange" min="1" max="4" step="0.05" value="1.25">
-        </div>
-
-        <div>
-          <div class="label-row"><label class="label">스텝</label><span class="slider-out" id="hiresStepsOut">20</span></div>
-          <input type="range" id="hiresStepsRange" min="1" max="150" value="20">
-        </div>
-
-        <div>
-          <div class="label-row"><label class="label">노이즈 제거 양</label><span class="slider-out" id="hiresDenoiseOut">0.45</span></div>
-          <input type="range" id="hiresDenoiseRange" min="0" max="1" step="0.01" value="0.45">
-        </div>
-
-        <div>
-          <div class="label-row" style="margin-bottom:4px;">
-            <button type="button" id="hiresAdvancedToggle" class="lora-text-btn" style="font-size:12px; padding:2px 0;">고급</button>
-          </div>
-          <p id="hiresAdvancedSummary" style="font-size:11px; color: var(--text-muted); margin:0 0 8px;"></p>
-          <div id="hiresAdvancedPanel" style="display:none; flex-direction:column; gap:8px;">
-            <div>
-              <div class="label-row"><label class="label">CFG</label><span class="slider-out" id="hiresCfgOut"></span></div>
-              <input type="range" id="hiresCfgRange" min="1" max="30" step="0.5" value="5">
-            </div>
-            <div>
-              <label class="label">샘플러</label>
-              <div class="searchable-select">
-                <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
-                <input type="hidden" id="hiresSamplerSelect">
-                <div class="searchable-dropdown"></div>
-              </div>
-            </div>
-            <div>
-              <label class="label">스케줄러</label>
-              <div class="searchable-select">
-                <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
-                <input type="hidden" id="hiresSchedulerSelect">
-                <div class="searchable-dropdown"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
 
     <div class="generated-section" id="generatedSection">
       <div class="generated-title-row">
@@ -533,18 +545,28 @@
       </div>
 
       <div id="currentResult" class="current-result">
-        <div id="resultImage" class="result-image-placeholder">이미지 미리보기</div>
+        <div class="result-stage">
+          <div id="resultImage" class="result-image-placeholder">이미지 미리보기</div>
+          <div id="progressOverlay" class="progress-overlay" hidden aria-hidden="true">
+            <div class="progress-pill"><b id="progressOverlayNum">0% / 0%</b><span>현재 / 전체</span></div>
+          </div>
+        </div>
         <button id="preHiresToggleBtn" class="delete-image-btn" style="left:8px; right:auto; display:none;" type="button" aria-label="hires 이전 이미지로 전환">
           <i class="ti ti-repeat" aria-hidden="true"></i>
         </button>
         <button id="deleteCurrentBtn" class="delete-image-btn" type="button" aria-label="이미지 삭제" style="display:none;">✕</button>
         <div class="progress-track" id="progressTrack">
           <div id="batchDots" style="display:flex; justify-content:center; gap:5px; padding-bottom:2px;"></div>
-          <div id="stepProgressBar" class="progress-bar-fill step-fill"></div>
-          <div id="progressBar" class="progress-bar-fill overall-fill"></div>
+          <div class="progress-meta">
+            <span id="progressStageLabel" class="progress-stage-label"></span>
+            <span class="progress-legend"><span><i class="lg-step"></i>현재 단계</span><span><i class="lg-overall"></i>전체</span></span>
+          </div>
+          <div id="progressBar" class="progress-meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="전체 진행도">
+            <div class="progress-bar"><i class="progress-step"></i><i class="progress-overall"></i></div>
+          </div>
         </div>
       </div>
-      <div style="display:flex; gap:8px; margin-top:8px;">
+      <div class="pc-result-actions" style="display:flex; gap:8px; margin-top:8px;">
         <button id="reuseSettingsBtn" type="button" style="display:none; flex:1; min-width:0; border:0.5px solid var(--border); background: var(--surface-2); color: var(--text-primary); border-radius: var(--radius); padding:9px 0; font-size:13px; align-items:center; justify-content:center; gap:6px;">
           <i class="ti ti-recycle" aria-hidden="true" style="font-size:15px;"></i>이 설정 재사용
         </button>
@@ -566,7 +588,7 @@
         <p id="upscaleModelError" style="display:none; color: var(--text-danger); font-size:12px; margin:6px 0 0;">Upscale 모델 설치 필요</p>
       </div>
 
-      <div class="label-row" style="margin: 14px 0 7px;">
+      <div class="label-row pc-history-head" style="margin: 14px 0 7px;">
         <span class="history-title" style="margin: 0;">이전 생성 이미지</span>
         <button id="clearHistoryBtn" class="lora-remove-btn" type="button" aria-label="이전 생성 이미지 전체 삭제">✕</button>
       </div>
@@ -574,8 +596,6 @@
         <div class="history-empty">이전에 생성한 이미지가 여기에 표시됩니다.</div>
       </div>
     </div>
-
-    <p class="scroll-hint">스크롤해도 생성 버튼은 항상 화면 하단에 고정됩니다</p>
 
   </div>
 
@@ -588,5 +608,6 @@
   </div>
 
   <script src="{{ url_for('static', filename='js/base.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/pc_layout.js') }}"></script>
 </body>
 </html>

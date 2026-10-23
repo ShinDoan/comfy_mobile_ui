@@ -1,11 +1,27 @@
 """ComfyUI Mobile UI - Flask 백엔드 (실제 ComfyUI 연동)"""
-import base64, hashlib, json, os, socket, threading, time, urllib.parse, urllib.request, uuid
+import base64, hashlib, json, os, socket, threading, time, urllib.error, urllib.parse, urllib.request, uuid
 from datetime import datetime, timezone
 import yaml
 import websocket
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
 app = Flask(__name__)
+
+# ----- 로그 정리 -----
+# 진행도 폴링(0.8초마다 GET /api/generate/<id>), 이미지/정적 파일 요청은 접속 로그에서 제외한다.
+# 오류(4xx/5xx)는 그대로 남긴다. 전부 보고 싶으면 환경변수 MOBILE_UI_VERBOSE=1 로 실행.
+import logging, re as _re
+VERBOSE = os.environ.get("MOBILE_UI_VERBOSE") == "1"
+_QUIET_REQUEST = _re.compile(r'"GET (/api/generate/|/generated-images/|/static/|/api/state|/api/generated-images)[^"]*" [23]\d\d')
+
+_QUIET_STALE_JOB = _re.compile(r'GET /api/generate/[^"]*\S* HTTP[^"]*" 404')
+
+class _QuietAccessLog(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        return VERBOSE or not (_QUIET_REQUEST.search(msg) or _QUIET_STALE_JOB.search(msg))
+
+logging.getLogger("werkzeug").addFilter(_QuietAccessLog())
 
 # ===== 환경에 맞게 수정하세요 =====
 COMFY_URL = "http://127.0.0.1:8188"
@@ -143,7 +159,7 @@ def save_state():
 
 # ---------- ComfyUI API 기반 모델 목록 ----------
 
-def get_node_options(node_type, input_name):
+def _fetch_node_options_once(node_type, input_name):
     try:
         with urllib.request.urlopen(f"{COMFY_URL}/object_info/{urllib.parse.quote(node_type)}", timeout=10) as r:
             data = json.loads(r.read())
@@ -151,7 +167,7 @@ def get_node_options(node_type, input_name):
         info = data.get(node_type, {})
         if not info:
             print(f"[WARN] ComfyUI에 '{node_type}' 노드가 없습니다. (커스텀 노드/애드온 설치 여부 확인 필요)")
-            return []
+            return None
 
         required = info.get("input", {}).get("required", {})
         value = required.get(input_name)
@@ -171,8 +187,44 @@ def get_node_options(node_type, input_name):
         print(f"[WARN] '{node_type}.{input_name}' 응답 형식을 이해하지 못했습니다: {value!r}")
         return []
     except Exception as e:
-        print(f"[ERROR] ComfyUI {node_type}.{input_name} 조회 실패: {e}")
-        return []
+        raise ComfyError(f"{node_type}.{input_name} 조회 실패: {e}") from e
+
+# 모델 목록 캐시: ComfyUI가 바쁠 때 /object_info 가 잠깐 실패해도 마지막으로 성공한 목록을 쓴다.
+_node_options_cache = {}   # (node_type, input_name) -> (저장 시각, 옵션 목록)
+_node_options_lock = threading.Lock()
+
+def get_node_options(node_type, input_name, max_age=15, retries=3):
+    """ComfyUI 노드 입력의 선택지 목록을 돌려준다.
+    - max_age 초 이내에 성공한 결과가 있으면 그대로 재사용(배치 생성 시 반복 조회 방지). 0 이면 항상 새로 조회.
+    - 실패하면 최대 retries 번 재시도하고, 그래도 안 되면 오래된 캐시를 대신 돌려준다.
+    - 빈 목록은 '성공'으로 캐시하지 않는다(조회 실패와 구분)."""
+    key = (node_type, input_name)
+    now = time.time()
+    with _node_options_lock:
+        cached = _node_options_cache.get(key)
+    if cached and max_age and now - cached[0] <= max_age:
+        return list(cached[1])
+
+    last_err = None
+    for attempt in range(retries):
+        try:
+            options = _fetch_node_options_once(node_type, input_name)
+        except Exception as e:
+            last_err = e
+            time.sleep(0.5 * (attempt + 1))
+            continue
+        if options is None:          # 노드 자체가 없음: 재시도해도 소용없다
+            return []
+        if options:
+            with _node_options_lock:
+                _node_options_cache[key] = (time.time(), list(options))
+        return list(options)
+
+    if cached:
+        print(f"[WARN] {last_err} -> 마지막으로 성공한 목록({len(cached[1])}개)을 사용합니다.")
+        return list(cached[1])
+    print(f"[ERROR] ComfyUI {last_err}")
+    return []
 
 FILTER_SETTINGS_FILE = os.path.join(DATA_DIR, "filter_settings.json")
 DEFAULT_FILTER_KEYWORDS = {"anima": ["ANIMA"], "il": ["IL"]}
@@ -241,14 +293,14 @@ def apply_filter(kind, family, items):
     return [x for x in items if matches_keywords(x, keywords)]
 
 
-def get_comfyui_models():
+def get_comfyui_models(max_age=15):
     # Anima는 UNETLoader의 unet_name, IL은 CheckpointLoaderSimple의 ckpt_name을
     # 각각 따로 조회한다. 두 계열의 모델 구조를 절대로 섞지 않는다.
-    anima_unets = get_node_options("UNETLoader", "unet_name")
-    il_checkpoints = get_node_options("CheckpointLoaderSimple", "ckpt_name")
-    all_loras = get_node_options("LoraLoader", "lora_name")
-    clips = get_node_options("CLIPLoader", "clip_name")
-    vaes = get_node_options("VAELoader", "vae_name")
+    anima_unets = get_node_options("UNETLoader", "unet_name", max_age=max_age)
+    il_checkpoints = get_node_options("CheckpointLoaderSimple", "ckpt_name", max_age=max_age)
+    all_loras = get_node_options("LoraLoader", "lora_name", max_age=max_age)
+    clips = get_node_options("CLIPLoader", "clip_name", max_age=max_age)
+    vaes = get_node_options("VAELoader", "vae_name", max_age=max_age)
 
     return {
         "anima": {
@@ -899,7 +951,7 @@ def api_models():
     family = request.args.get("family", "anima").lower()
     if family not in ("anima", "il"):
         family = "anima"
-    models = get_comfyui_models()
+    models = get_comfyui_models(max_age=0)
     resp = jsonify(models[family])
     resp.headers["Cache-Control"] = "no-store"
     return resp
@@ -1086,7 +1138,11 @@ def build_prompt(data):
     # UI에서 선택한 값도 생성 직전에 ComfyUI의 실제 목록과 다시 검증한다.
     if ckpt not in models["checkpoints"]:
         label = "UNET 모델" if family == "anima" else "체크포인트"
-        raise ValueError(f"선택한 {label}을(를) ComfyUI에서 찾을 수 없습니다: {ckpt}")
+        if not models["checkpoints"]:
+            raise ValueError(f"ComfyUI에서 {label} 목록을 받지 못했습니다. ComfyUI가 실행 중인지, "
+                             "필터 키워드/모델 경로 설정이 맞는지 확인해 주세요.")
+        raise ValueError(f"선택한 {label}을(를) ComfyUI에서 찾을 수 없습니다: {ckpt} "
+                         "(파일 이름이 바뀌었거나 필터 키워드에서 제외됐을 수 있습니다. 모델을 다시 선택해 주세요.)")
 
     valid_loras = set(models["loras"])
     checked_loras = []
@@ -1241,14 +1297,82 @@ def build_prompt(data):
 generation_jobs = {}
 generation_jobs_lock = threading.Lock()
 
-def fetch_view_bytes(image_info):
+class ComfyError(RuntimeError):
+    """ComfyUI 와의 통신/실행 중 발생한 오류 (사용자에게 그대로 보여줄 수 있는 메시지)."""
+
+
+def comfy_request_json(url, payload=None, timeout=15):
+    """ComfyUI 에 JSON 요청을 보내고 JSON 응답을 돌려준다.
+    HTTP 오류(400 등)가 나면 ComfyUI 가 돌려준 본문(node_errors 등)을 메시지에 담아 던진다.
+    (예전에는 'HTTP Error 400' 만 보여서 원인을 알 수 없었다.)"""
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"Content-Type": "application/json"} if data is not None else {}
+    req = urllib.request.Request(url, data=data, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", "replace")[:1500]
+        except Exception:
+            body = ""
+        raise ComfyError(f"ComfyUI 요청 실패 (HTTP {e.code}): {body or e.reason}") from e
+
+
+def fetch_view_bytes(image_info, retries=5):
+    """ComfyUI /view 에서 이미지 바이트를 받아온다. 파일이 디스크에 기록되기 직전/직후의
+    아주 짧은 틈이나 일시적인 오류에 대비해 몇 번 재시도한다."""
     q = urllib.parse.urlencode({
         "filename": image_info["filename"],
-        "subfolder": image_info.get("subfolder", ""),
-        "type": image_info.get("type", "output"),
+        "subfolder": image_info.get("subfolder", "") or "",
+        "type": image_info.get("type", "output") or "output",
     })
-    with urllib.request.urlopen(f"{COMFY_URL}/view?{q}", timeout=30) as r:
-        return r.read()
+    last_err = None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(f"{COMFY_URL}/view?{q}", timeout=30) as r:
+                body = r.read()
+            if body:
+                return body
+            last_err = "빈 응답"
+        except Exception as e:
+            last_err = e
+        time.sleep(0.4 * (attempt + 1))
+    raise ComfyError(f"ComfyUI 에서 이미지를 가져오지 못했습니다 ({image_info.get('filename')}): {last_err}")
+
+
+def collect_image_infos(node_output):
+    """한 노드의 출력(dict)에서 이미지 항목 목록을 뽑는다.
+    ComfyUI 버전에 따라 항목에 id/metadata 같은 필드가 더 붙을 수 있으므로,
+    filename 이 있는 dict 만 이미지로 취급하고 나머지 필드는 무시한다."""
+    found = []
+    if not isinstance(node_output, dict):
+        return found
+    for key, value in node_output.items():
+        if not isinstance(value, list):
+            continue
+        for entry in value:
+            if isinstance(entry, dict) and entry.get("filename"):
+                found.append(entry)
+    return found
+
+
+def pick_image_info(outputs, final_node=None):
+    """outputs 에서 최종 결과 이미지 하나를 고른다.
+    1) final_node 의 이미지  2) 그 외 노드 중 type=output(저장된 이미지)  3) 아무 이미지."""
+    if not isinstance(outputs, dict):
+        return None
+    if final_node and final_node in outputs:
+        infos = collect_image_infos(outputs[final_node])
+        if infos:
+            return infos[0]
+    all_infos = []
+    for node_out in outputs.values():
+        all_infos.extend(collect_image_infos(node_out))
+    for info in all_infos:
+        if info.get("type", "output") == "output":
+            return info
+    return all_infos[0] if all_infos else None
 
 
 def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
@@ -1257,45 +1381,47 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
     (텍스트→이미지, 업스케일 공용) final_node 를 지정하면 그 노드의 출력을 우선 사용한다
     (예: hires 사용 시 base/hires SaveImage 노드가 둘 다 있으므로 어느 쪽이 최종 결과인지
     명시적으로 골라야 한다). outputs 를 함께 반환하는 이유는, hires 사용 시 base 단계
-    이미지(다른 노드의 출력)도 나중에 같이 받아오기 위함이다."""
+    이미지(다른 노드의 출력)도 나중에 같이 받아오기 위함이다.
+
+    ※ 웹소켓을 /prompt 제출 '이전'에 먼저 연결한다. 제출 후에 연결하면, 이미 캐시된 결과처럼
+      아주 빨리 끝나는 작업의 완료 이벤트를 놓쳐서 한참 멈춰 있게 된다."""
     total_nodes = len(prompt)
     client_id = uuid.uuid4().hex
-    payload = json.dumps({"prompt": prompt, "client_id": client_id}).encode("utf-8")
-    req = urllib.request.Request(f"{COMFY_URL}/prompt", data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        result = json.loads(r.read())
+    ws = open_progress_socket(client_id)
+    try:
+        result = comfy_request_json(f"{COMFY_URL}/prompt", {"prompt": prompt, "client_id": client_id}, timeout=15)
+        prompt_id = result.get("prompt_id")
+        if not prompt_id:
+            raise ComfyError(f"ComfyUI가 프롬프트를 거부했습니다: {result.get('node_errors', result)}")
 
-    prompt_id = result.get("prompt_id")
-    if not prompt_id:
-        raise RuntimeError(f"ComfyUI가 프롬프트를 거부했습니다: {result.get('node_errors', result)}")
+        with generation_jobs_lock:
+            if job_id in generation_jobs:
+                job = generation_jobs[job_id]
+                job["overall"] = 0
+                job["step"] = 0
+                job["prompt_id"] = prompt_id
+                # 배치의 이전 이미지에서 남은 미리보기/단계가 다음 이미지에 섞이지 않게 비운다.
+                job.pop("preview_image", None)
+                job.pop("stage", None)
 
-    with generation_jobs_lock:
-        if job_id in generation_jobs:
-            generation_jobs[job_id]["overall"] = 0
-            generation_jobs[job_id]["step"] = 0
-            generation_jobs[job_id]["prompt_id"] = prompt_id
+        ws_outputs = {}
+        wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview=bool(HIRES_NODE_IDS & set(prompt)))
+    finally:
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
 
-    if not track_progress_via_websocket(job_id, prompt_id, client_id, total_nodes):
-        wait_for_completion_by_polling(job_id, prompt_id)
-
-    with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=10) as r:
-        history = json.loads(r.read())
-    entry = history.get(prompt_id, {})
-    outputs = entry.get("outputs", {})
-
-    image_info = None
-    if final_node and final_node in outputs and outputs[final_node].get("images"):
-        image_info = outputs[final_node]["images"][0]
-    if image_info is None:
-        for node_out in outputs.values():
-            if node_out.get("images"):
-                image_info = node_out["images"][0]
-                break
+    outputs = fetch_history_outputs(prompt_id, ws_outputs)
+    image_info = pick_image_info(outputs, final_node)
     if not image_info:
-        raise TimeoutError("생성 시간이 초과되었거나 결과를 찾지 못했습니다.")
+        raise ComfyError("ComfyUI 실행은 끝났지만 결과 이미지 정보를 찾지 못했습니다. "
+                         f"(history outputs: {json.dumps(outputs, ensure_ascii=False)[:500]})")
 
     img_bytes = fetch_view_bytes(image_info)
     return img_bytes, image_info, outputs
+
 
 
 def generate_one_image(job_id, data):
@@ -1450,89 +1576,155 @@ def run_batch_job(job_id, data):
 
 HIRES_NODE_IDS = {"39", "40", "41", "42", "43", "47"}
 BASE_PREVIEW_NODE_ID = "17"
+MAX_WAIT_SECONDS = 2 * 60 * 60  # 큐에 다른 작업이 밀려 있어도 충분히 기다린다
 
 
-def track_progress_via_websocket(job_id, prompt_id, client_id, total_nodes):
-    """ComfyUI /ws 로 실시간 진행 이벤트를 받아 단계별(step)/전체(overall) 진행도를 갱신.
-    hires 사용 시, base 단계 이미지(17번 노드)가 완성되는 즉시 미리보기로 노출하고,
-    hires 노드 실행이 시작되면 stage를 "hires"로 바꿔서 프론트가 블러 효과를 넣을 수 있게 한다.
-    성공적으로 완료까지 지켜봤으면 True, 연결 실패 등으로 못 봤으면 False를 반환."""
+def open_progress_socket(client_id):
+    """ComfyUI /ws 에 연결한다. 실패하면 None (그 경우 /history 폴링만으로 완료를 감지)."""
     ws_url = COMFY_URL.replace("http://", "ws://").replace("https://", "wss://") + f"/ws?clientId={client_id}"
     try:
-        ws = websocket.create_connection(ws_url, timeout=15)
+        return websocket.create_connection(ws_url, timeout=10)
     except Exception as e:
         print(f"[WARN] ComfyUI 웹소켓 연결 실패, 폴링 방식으로 대체: {e}")
-        return False
+        return None
 
-    nodes_started = 0
+
+def get_history_entry(prompt_id):
+    """/history/{prompt_id} 의 항목을 반환 (아직 없으면 None)."""
     try:
-        ws.settimeout(300)
-        while True:
-            raw = ws.recv()
-            if not isinstance(raw, str):
-                continue  # 바이너리 메시지(미리보기 이미지)는 무시
-            event = json.loads(raw)
+        history = comfy_request_json(f"{COMFY_URL}/history/{urllib.parse.quote(prompt_id)}", timeout=10)
+    except Exception as e:
+        print(f"[WARN] history 조회 실패: {e}")
+        return None
+    entry = history.get(prompt_id) if isinstance(history, dict) else None
+    return entry or None
+
+
+def history_error_message(entry):
+    """history 항목이 '오류로 끝남' 상태면 사람이 읽을 메시지를, 아니면 None 을 반환."""
+    status = (entry or {}).get("status") or {}
+    if status.get("status_str") != "error":
+        return None
+    for msg in status.get("messages", []):
+        if isinstance(msg, (list, tuple)) and len(msg) == 2 and msg[0] == "execution_error":
+            d = msg[1] or {}
+            return f"ComfyUI 실행 오류 (노드 {d.get('node_id')} {d.get('node_type', '')}): {d.get('exception_message', '').strip()}"
+    return "ComfyUI 실행 중 오류가 발생했습니다."
+
+
+def fetch_history_outputs(prompt_id, ws_outputs=None):
+    """완료된 작업의 outputs 를 가져온다. 실행 완료 이벤트와 history 기록 사이의 아주 짧은 틈에
+    비어 있을 수 있으므로 몇 번 재시도하고, 끝내 비어 있으면 웹소켓으로 받아둔 출력으로 대체한다."""
+    entry = None
+    for _ in range(20):
+        entry = get_history_entry(prompt_id)
+        if entry:
+            err = history_error_message(entry)
+            if err:
+                raise ComfyError(err)
+            if entry.get("outputs"):
+                return entry["outputs"]
+        time.sleep(0.5)
+    if ws_outputs:
+        print("[WARN] history 에 outputs 가 없어 웹소켓으로 받은 출력으로 대체합니다.")
+        return ws_outputs
+    return (entry or {}).get("outputs") or {}
+
+
+def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview=False):
+    """prompt_id 작업이 끝날 때까지 기다리며 진행도를 job 에 기록한다.
+    - 웹소켓 이벤트(executing/progress/executed/execution_success/error)로 실시간 진행을 추적하고,
+    - 웹소켓이 없거나 완료 이벤트를 놓쳐도 3초마다 /history 를 확인해서 반드시 빠져나온다.
+    오류/중단 이벤트가 오면 ComfyError 를 던진다."""
+    nodes_started = 0
+    deadline = time.time() + MAX_WAIT_SECONDS
+    last_history_check = 0.0
+    if ws is not None:
+        ws.settimeout(2.0)
+
+    def set_job(**kv):
+        with generation_jobs_lock:
+            if job_id in generation_jobs:
+                generation_jobs[job_id].update(kv)
+
+    while time.time() < deadline:
+        raw = None
+        if ws is not None:
+            try:
+                raw = ws.recv()
+            except websocket.WebSocketTimeoutException:
+                raw = None
+            except Exception as e:
+                print(f"[WARN] 웹소켓 진행 추적 중단, 폴링 방식으로 대체: {e}")
+                ws = None
+        else:
+            time.sleep(1)
+
+        if isinstance(raw, str):  # 바이너리 메시지(미리보기 이미지)는 무시
+            try:
+                event = json.loads(raw)
+            except ValueError:
+                event = {}
             etype = event.get("type")
             edata = event.get("data", {}) or {}
+            pid = edata.get("prompt_id")
+            mine = pid is None or pid == prompt_id  # 구버전 progress 이벤트는 prompt_id 가 없다
 
-            if etype == "progress":
+            if etype == "progress" and mine:
                 value, max_value = edata.get("value", 0), edata.get("max", 0)
                 step_pct = round(100 * value / max_value) if max_value else 0
-                print(f"[WS] progress: {value}/{max_value} ({step_pct}%) node={edata.get('node')}")
-                with generation_jobs_lock:
-                    if job_id in generation_jobs:
-                        generation_jobs[job_id]["step"] = step_pct
+                set_job(step=step_pct)
 
-            elif etype == "executed":
-                if edata.get("prompt_id") == prompt_id and edata.get("node") == BASE_PREVIEW_NODE_ID:
-                    images = (edata.get("output") or {}).get("images")
-                    if images:
-                        with generation_jobs_lock:
-                            if job_id in generation_jobs:
-                                generation_jobs[job_id]["preview_image"] = images[0]
+            elif etype == "execution_cached" and pid == prompt_id:
+                nodes_started += len(edata.get("nodes") or [])
+
+            elif etype == "executed" and pid == prompt_id:
+                node, output = edata.get("node"), edata.get("output")
+                if node is not None and output:
+                    ws_outputs[str(node)] = output
+                if want_preview and str(node) == BASE_PREVIEW_NODE_ID:
+                    infos = collect_image_infos(output)
+                    if infos:
+                        set_job(preview_image=infos[0])
 
             elif etype == "executing":
-                print(f"[WS] executing: node={edata.get('node')} prompt_id={edata.get('prompt_id')}")
-                if edata.get("node") is None and edata.get("prompt_id") == prompt_id:
-                    with generation_jobs_lock:
-                        if job_id in generation_jobs:
-                            generation_jobs[job_id]["overall"] = 100
-                            generation_jobs[job_id]["step"] = 100
-                    return True
-                if edata.get("prompt_id") == prompt_id:
+                if edata.get("node") is None and pid == prompt_id:
+                    set_job(overall=100, step=100)
+                    return
+                if pid == prompt_id:
                     nodes_started += 1
                     overall_pct = min(round(100 * nodes_started / max(total_nodes, 1)), 99)
-                    with generation_jobs_lock:
-                        if job_id in generation_jobs:
-                            generation_jobs[job_id]["overall"] = overall_pct
-                            generation_jobs[job_id]["step"] = 0
-                            if edata.get("node") in HIRES_NODE_IDS:
-                                generation_jobs[job_id]["stage"] = "hires"
-    except Exception as e:
-        print(f"[WARN] 웹소켓 진행 추적 중단, 폴링 방식으로 대체: {e}")
-        return False
-    finally:
-        try:
-            ws.close()
-        except Exception:
-            pass
+                    kv = {"overall": overall_pct, "step": 0}
+                    if edata.get("node") in HIRES_NODE_IDS:
+                        kv["stage"] = "hires"
+                    set_job(**kv)
 
+            elif etype == "execution_success" and pid == prompt_id:
+                set_job(overall=100, step=100)
+                return
 
-def wait_for_completion_by_polling(job_id, prompt_id):
-    """웹소켓을 못 쓸 때의 대체 수단: /history 를 주기적으로 확인만 한다 (단계별 진행도는 알 수 없음)."""
-    for _ in range(300):
-        time.sleep(1)
-        try:
-            with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=10) as r:
-                history = json.loads(r.read())
-        except Exception:
-            continue
-        entry = history.get(prompt_id)
-        if entry and entry.get("outputs"):
-            with generation_jobs_lock:
-                if job_id in generation_jobs:
-                    generation_jobs[job_id]["overall"] = 100
-            return
+            elif etype == "execution_error" and pid == prompt_id:
+                raise ComfyError(
+                    f"ComfyUI 실행 오류 (노드 {edata.get('node_id')} {edata.get('node_type', '')}): "
+                    f"{str(edata.get('exception_message', '')).strip()}")
+
+            elif etype == "execution_interrupted" and pid == prompt_id:
+                raise ComfyError("ComfyUI 작업이 중단되었습니다.")
+
+        # 웹소켓 이벤트를 놓쳤더라도 history 에 기록이 생기면 완료로 본다.
+        now = time.time()
+        if now - last_history_check >= 3:
+            last_history_check = now
+            entry = get_history_entry(prompt_id)
+            if entry:
+                err = history_error_message(entry)
+                if err:
+                    raise ComfyError(err)
+                set_job(overall=100, step=100)
+                return
+
+    raise ComfyError("생성 시간이 초과되었습니다 (ComfyUI 응답 없음).")
+
 
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
@@ -1551,7 +1743,9 @@ def api_generate_status(job_id):
         return jsonify({"status": "not_found"}), 404
     result = dict(job)
     if result.get("preview_image"):
-        result["preview_url"] = f"/api/generate/{urllib.parse.quote(job_id)}/preview"
+        # prompt_id 를 붙여 이미지마다 주소가 달라지게 한다 (같은 주소면 Safari 가 이전 그림을 재사용함)
+        result["preview_url"] = (f"/api/generate/{urllib.parse.quote(job_id)}/preview"
+                                 f"?v={urllib.parse.quote(str(result.get('prompt_id', '')))}")
     return jsonify(result)
 
 @app.route("/api/generate/<job_id>/preview")
@@ -1605,7 +1799,8 @@ def load_tag_dataset():
         return
     with open(TAGS_FILE, encoding="utf-8") as f:
         TAG_DATA = json.load(f)
-    print(f"[INFO] 태그 데이터셋 로드 완료: {len(TAG_DATA)}개")
+    if VERBOSE:
+        print(f"[INFO] 태그 데이터셋 로드 완료: {len(TAG_DATA)}개")
 
 def format_count(n):
     try:
@@ -1698,4 +1893,5 @@ if __name__ == "__main__":
     print(f" Mobile: http://{ip}:{PORT}")
     print(f" ComfyUI 대상: {COMFY_URL}")
     print("=" * 56)
-    app.run(host="0.0.0.0", port=PORT, debug=True, threaded=True)
+    # debug=True 는 0.0.0.0 에서 원격 코드 실행 콘솔을 노출하고, 리로더 때문에 시작이 두 번 일어난다(태그 로드 중복).
+    app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False, threaded=True)

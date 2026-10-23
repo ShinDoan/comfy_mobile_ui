@@ -3341,8 +3341,37 @@ async function loadGeneratedImages() {
 
 
 function setGenerationProgress(overallPct, stepPct) {
-  document.getElementById("progressBar").style.setProperty("--pct", `${overallPct}%`);
-  document.getElementById("stepProgressBar").style.setProperty("--pct", `${stepPct != null ? stepPct : 0}%`);
+  const bar = document.getElementById("progressBar");
+  const overall = Math.max(0, Math.min(100, Math.round(overallPct != null ? overallPct : 0)));
+  const step = Math.max(0, Math.min(100, Math.round(stepPct != null ? stepPct : 0)));
+  bar.style.setProperty("--overall", `${overall}%`);
+  bar.style.setProperty("--step", `${step}%`);
+  bar.setAttribute("aria-valuenow", overall);
+  const num = document.getElementById("progressOverlayNum");
+  if (num) num.textContent = `${step}% / ${overall}%`;
+}
+
+// 진행도 UI(바 + 미리보기 위 퍼센트)를 한꺼번에 보이거나 숨긴다.
+// PC 레이아웃의 진행도 바 위 "단계" 라벨. (모바일에서는 CSS로 숨겨져 있다)
+function setProgressStageLabel(stage, override) {
+  const el = document.getElementById("progressStageLabel");
+  if (!el) return;
+  if (override) { el.textContent = override; return; }
+  const hiresOn = document.getElementById("hiresEnabled").checked;
+  el.textContent = hiresOn ? (stage === "hires" ? "Hires 2 / 2 단계" : "Hires 1 / 2 단계") : "기본 생성";
+}
+
+function showProgress(labelOverride) {
+  setProgressStageLabel(null, labelOverride);
+  document.getElementById("progressTrack").style.display = "flex";
+  const ov = document.getElementById("progressOverlay");
+  if (ov) ov.hidden = false;
+}
+
+function hideProgress() {
+  document.getElementById("progressTrack").style.display = "none";
+  const ov = document.getElementById("progressOverlay");
+  if (ov) ov.hidden = true;
 }
 
 function renderBatchDots(completed, total) {
@@ -3385,7 +3414,7 @@ function initUpscaleControls() {
     settingsBtn.disabled = true;
     const prevText = upscaleBtn.innerHTML;
     upscaleBtn.innerHTML = "업스케일 중...";
-    progressTrack.style.display = "flex";
+    showProgress("업스케일");
     setGenerationProgress(0, 0);
     resultStatus.textContent = "업스케일 중 · 브라우저를 닫아도 서버에서 계속 진행됩니다";
 
@@ -3406,7 +3435,7 @@ function initUpscaleControls() {
         setGenerationProgress(status.overall != null ? status.overall : 0, status.step);
 
         if (status.status === "completed") {
-          progressTrack.style.display = "none";
+          hideProgress();
           resultStatus.textContent = "업스케일 완료";
           await loadGeneratedImages();
           break;
@@ -3414,7 +3443,7 @@ function initUpscaleControls() {
         if (status.status === "error") throw new Error(status.error || "업스케일 실패");
       }
     } catch (err) {
-      progressTrack.style.display = "none";
+      hideProgress();
       resultStatus.textContent = "오류: " + err.message;
     } finally {
       upscaleBtn.disabled = !upscaleModels.length;
@@ -3447,6 +3476,8 @@ function initGenerate(seedApi) {
   async function pollJob(jobId) {
     let lastCompleted = 0;
     let previewShown = false;
+    let requestedPreviewUrl = "";
+    let previewEpoch = 0; // 한 장이 끝날 때마다 올려서, 늦게 도착한 이전 미리보기를 무시한다
     let maxStepSeen = 0; // 노드가 바뀌면서 step이 0으로 리셋되어도, 블러가 도로 풀리지 않도록 최고값만 추적
     for (let i = 0; i < 3600; i++) {
       await new Promise((resolve) => setTimeout(resolve, 800));
@@ -3458,22 +3489,41 @@ function initGenerate(seedApi) {
 
       renderBatchDots(completed, total);
       setGenerationProgress(status.overall != null ? status.overall : 0, status.step);
+      setProgressStageLabel(status.stage);
       resultStatus.textContent =
         (status.status === "stopped" ? "중지 중 · " : "") +
         `${completed} / ${total} 생성 · 브라우저를 닫아도 서버에서 계속 진행됩니다`;
 
       // hires 사용 시: base 단계 이미지가 완성되는 즉시 미리보기로 보여주고,
       // hires 진행도가 올라갈수록 블러를 점점 없애서 서서히 선명해지는 느낌을 준다.
-      if (status.preview_url && !previewShown) {
-        resultImage.innerHTML = "";
-        const previewImg = document.createElement("img");
-        previewImg.id = "hiresPreviewImg";
-        previewImg.alt = "생성 중 미리보기";
-        previewImg.src = status.preview_url;
-        previewImg.style.transition = "filter 0.2s linear";
-        resultImage.appendChild(previewImg);
-        previewShown = true;
-        maxStepSeen = 0;
+      // 이미지마다 미리보기 주소가 다르므로, 처음 보는 주소일 때만 한 번 불러온다.
+      // 이미지를 먼저 내려받아 성공했을 때만 화면에 올리고(실패하면 기존 화면 유지 + 최대 3번 재시도),
+      // 그 사이 한 장이 끝났다면(epoch 변경) 늦게 도착한 미리보기는 버린다.
+      if (status.preview_url && status.preview_url !== requestedPreviewUrl) {
+        requestedPreviewUrl = status.preview_url;
+        const epoch = previewEpoch;
+        const url = status.preview_url;
+        const tryLoad = (attempt) => {
+          const probe = new Image();
+          probe.onload = () => {
+            if (epoch !== previewEpoch) return;
+            resultImage.innerHTML = "";
+            const previewImg = document.createElement("img");
+            previewImg.id = "hiresPreviewImg";
+            previewImg.alt = "생성 중 미리보기";
+            previewImg.src = probe.src;
+            previewImg.style.transition = "filter 0.2s linear";
+            resultImage.appendChild(previewImg);
+            previewShown = true;
+            maxStepSeen = 0;
+          };
+          probe.onerror = () => {
+            if (epoch !== previewEpoch || attempt >= 3) return;
+            setTimeout(() => tryLoad(attempt + 1), 700 * (attempt + 1));
+          };
+          probe.src = url + (attempt ? `&r=${attempt}` : "");
+        };
+        tryLoad(0);
       }
       if (previewShown) {
         const previewImg = document.getElementById("hiresPreviewImg");
@@ -3516,22 +3566,25 @@ function initGenerate(seedApi) {
 
       if (completed > lastCompleted) {
         lastCompleted = completed;
+        previewEpoch++;
         await loadGeneratedImages();
         previewShown = false;
         maxStepSeen = 0;
       }
 
       if (status.status === "completed") {
-        progressTrack.style.display = "none";
+        hideProgress();
         resultStatus.textContent = `${total} / ${total} 생성 완료`;
         return;
       }
       if (status.status === "stopped") {
-        progressTrack.style.display = "none";
+        previewEpoch++;
+        hideProgress();
         resultStatus.textContent = `중지됨 · ${completed} / ${total} 생성됨`;
         return;
       }
       if (status.status === "error") {
+        previewEpoch++;
         throw new Error(status.error || "생성 실패");
       }
     }
@@ -3567,7 +3620,7 @@ function initGenerate(seedApi) {
     document.getElementById("preHiresToggleBtn").style.display = "none";
     currentPreHiresUrl = null;
     viewingPreHires = false;
-    progressTrack.style.display = "flex";
+    showProgress();
     setGenerationProgress(0, 0);
     resultStatus.textContent = "생성 중 · 브라우저를 닫아도 서버에서 계속 생성됩니다";
     setRunningUI(true);
@@ -3586,7 +3639,7 @@ function initGenerate(seedApi) {
       await pollJob(currentJobId);
     } catch (err) {
       resultStatus.textContent = "오류: " + err.message;
-      progressTrack.style.display = "none";
+      hideProgress();
     } finally {
       setRunningUI(false);
       currentJobId = null;
