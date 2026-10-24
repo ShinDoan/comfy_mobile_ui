@@ -507,12 +507,14 @@ function initPromptPillEditor(prefix, isNegative) {
       }
       updatePreview();
     }
+    // 가중치가 없는(1.0) 태그에 처음 줄 때는 0.1, 그 뒤로는 0.05 씩 조절한다.
+    const weightStep = () => (Math.abs(t.weight - 1) < 0.001 ? 0.1 : 0.05);
     wrap.querySelector(".pill-minus").addEventListener("click", () => {
-      t.weight = Math.max(0.1, Math.round((t.weight - 0.05) * 100) / 100);
+      t.weight = Math.max(0.1, Math.round((t.weight - weightStep()) * 100) / 100);
       refreshWeightDisplay();
     });
     wrap.querySelector(".pill-plus").addEventListener("click", () => {
-      t.weight = Math.min(2, Math.round((t.weight + 0.05) * 100) / 100);
+      t.weight = Math.min(2, Math.round((t.weight + weightStep()) * 100) / 100);
       refreshWeightDisplay();
     });
     slider.addEventListener("input", () => {
