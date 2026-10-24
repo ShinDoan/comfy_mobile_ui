@@ -651,6 +651,11 @@ button {
   z-index: 5;
 }
 
+.download-image-btn {
+  right: 46px;
+  text-decoration: none;
+}
+
 .delete-image-btn.pre-hires-active {
   color: var(--fill-brand);
   text-shadow: 0 0 6px var(--fill-brand);
