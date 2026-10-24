@@ -4383,7 +4383,7 @@ function applyState(state) {
   );
 
   const defaultSteps = currentFam === "il" ? 30 : 24;
-  const defaultCfg = currentFam === "il" ? 8.0 : 5;
+  const defaultCfg = currentFam === "il" ? 7.5 : 5;
 
   const stepsRange = document.getElementById("stepsRange");
   setRangeValue(stepsRange, state.steps || defaultSteps);
