@@ -12,11 +12,12 @@ except ImportError:
 app = Flask(__name__)
 
 # ----- 로그 정리 -----
-# 진행도 폴링(0.8초마다 GET /api/generate/<id>), 이미지/정적 파일 요청은 접속 로그에서 제외한다.
+# 진행도 폴링(0.5초마다 GET /api/generate/<id>), 대기열 폴링(1~5초마다 GET /api/queue),
+# 이미지/정적 파일 요청은 접속 로그에서 제외한다.
 # 오류(4xx/5xx)는 그대로 남긴다. 전부 보고 싶으면 환경변수 MOBILE_UI_VERBOSE=1 로 실행.
 import logging, re as _re
 VERBOSE = os.environ.get("MOBILE_UI_VERBOSE") == "1"
-_QUIET_REQUEST = _re.compile(r'"GET (/api/generate/|/generated-images/|/generated-thumbs/|/static/|/api/state|/api/generated-images)[^"]*" [23]\d\d')
+_QUIET_REQUEST = _re.compile(r'"GET (/api/generate/|/api/queue|/generated-images/|/generated-thumbs/|/static/|/api/state|/api/generated-images)[^"]*" [23]\d\d')
 
 _QUIET_STALE_JOB = _re.compile(r'GET /api/generate/[^"]*\S* HTTP[^"]*" 404')
 
@@ -1564,6 +1565,9 @@ def log_completion_timing(t, saved):
     (완료 후 이미지가 늦게 뜰 때 어느 단계가 원인인지 확인하기 위한 로그)"""
     done = t.get("comfy_done")  # ComfyUI 가 보낸 완료 시각 (웹소켓으로 받았을 때만 있음)
     parts = []
+    if t.get("sampling_done"):
+        # 마지막 샘플링이 100% 가 된 뒤 ComfyUI 가 VAE 디코딩·PNG 저장을 마치기까지 (화면은 이미 거의 다 찬 상태)
+        parts.append(f"샘플링 100% → ComfyUI 완료 {t['detected'] - t['sampling_done']:.1f}s")
     if done:
         parts.append(f"완료 감지 {t['detected'] - done:.1f}s")
     parts += [
@@ -1848,6 +1852,8 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
             if etype == "progress" and mine:
                 value, max_value = edata.get("value", 0), edata.get("max", 0)
                 step_pct = round(100 * value / max_value) if max_value else 0
+                if max_value and value >= max_value:
+                    timing["sampling_done"] = time.time()
                 set_job(step=step_pct)
 
             elif etype == "execution_cached" and pid == prompt_id:
