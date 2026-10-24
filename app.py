@@ -1450,7 +1450,7 @@ def pick_image_info(outputs, final_node=None):
     return all_infos[0] if all_infos else None
 
 
-def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
+def run_prompt_and_fetch_image(job_id, prompt, final_node=None, timing=None):
     """워크플로우(prompt)를 ComfyUI에 제출하고, 진행 상황을 job_id에 기록하며,
     완료되면 결과 이미지 바이트, image_info, 그리고 노드별 전체 출력(outputs)을 반환한다.
     (텍스트→이미지, 업스케일 공용) final_node 를 지정하면 그 노드의 출력을 우선 사용한다
@@ -1461,6 +1461,8 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
     ※ 웹소켓을 /prompt 제출 '이전'에 먼저 연결한다. 제출 후에 연결하면, 이미 캐시된 결과처럼
       아주 빨리 끝나는 작업의 완료 이벤트를 놓쳐서 한참 멈춰 있게 된다."""
     total_nodes = len(prompt)
+    if timing is None:
+        timing = {}
     client_id = uuid.uuid4().hex
     # prompt_id 를 제출 전에 미리 정해서 함께 보낸다 (ComfyUI 가 지원). 그래야 대기열 화면이
     # 제출 직후부터 이 작업을 "이 앱의 작업"으로 알아보고, 응답이 늦거나 끊겨도 작업을 다시 찾을 수 있다.
@@ -1509,7 +1511,8 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
             set_prompt_id(prompt_id)
 
         ws_outputs = {}
-        wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview=bool(HIRES_NODE_IDS & set(prompt)))
+        wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs,
+                        want_preview=bool(HIRES_NODE_IDS & set(prompt)), timing=timing)
     finally:
         if ws is not None:
             try:
@@ -1517,14 +1520,18 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
             except Exception:
                 pass
 
+    timing["detected"] = time.time()
     save_nodes = [nid for nid, node in prompt.items() if node.get("class_type") == "SaveImage"]
     outputs = fetch_history_outputs(prompt_id, ws_outputs, required_nodes=save_nodes)
+    timing["outputs_from"] = "ws" if outputs is ws_outputs else "history"
+    timing["outputs"] = time.time()
     image_info = pick_image_info(outputs, final_node)
     if not image_info:
         raise ComfyError("ComfyUI 실행은 끝났지만 결과 이미지 정보를 찾지 못했습니다. "
                          f"(history outputs: {json.dumps(outputs, ensure_ascii=False)[:500]})")
 
     img_bytes = fetch_view_bytes(image_info)
+    timing["view"] = time.time()
     return img_bytes, image_info, outputs
 
 
@@ -1535,7 +1542,8 @@ def generate_one_image(job_id, data):
     hires 를 사용한 경우, hires 적용 전(base 단계) 이미지도 함께 받아와 같이 저장해서
     나중에 두 버전을 전환해서 볼 수 있게 한다."""
     prompt, final_node = build_prompt(data)
-    img_bytes, image_info, outputs = run_prompt_and_fetch_image(job_id, prompt, final_node)
+    timing = {}
+    img_bytes, image_info, outputs = run_prompt_and_fetch_image(job_id, prompt, final_node, timing=timing)
 
     pre_hires_bytes = None
     hires_enabled = bool((data.get("hires") or {}).get("enabled"))
@@ -1544,8 +1552,29 @@ def generate_one_image(job_id, data):
             pre_hires_bytes = fetch_view_bytes(outputs["17"]["images"][0])
         except Exception as e:
             print(f"[WARN] hires 이전 이미지 조회 실패: {e}")
+    timing["pre_hires"] = time.time()
 
-    return save_generated_image(img_bytes, image_info, data, pre_hires_bytes=pre_hires_bytes)
+    item = save_generated_image(img_bytes, image_info, data, pre_hires_bytes=pre_hires_bytes)
+    log_completion_timing(timing, time.time())
+    return item
+
+
+def log_completion_timing(t, saved):
+    """ComfyUI 가 작업을 끝낸 뒤 화면에 결과가 넘어가기까지 단계별로 걸린 시간을 한 줄로 출력한다.
+    (완료 후 이미지가 늦게 뜰 때 어느 단계가 원인인지 확인하기 위한 로그)"""
+    done = t.get("comfy_done")  # ComfyUI 가 보낸 완료 시각 (웹소켓으로 받았을 때만 있음)
+    parts = []
+    if done:
+        parts.append(f"완료 감지 {t['detected'] - done:.1f}s")
+    parts += [
+        f"감지 방법 {t.get('detected_by', '?')}",
+        f"결과 조회 {t['outputs'] - t['detected']:.1f}s({t.get('outputs_from')})",
+        f"이미지 받기 {t['view'] - t['outputs']:.1f}s",
+        f"hires 이전 이미지 {t['pre_hires'] - t['view']:.1f}s",
+        f"저장 {saved - t['pre_hires']:.1f}s",
+        f"합계 {saved - (done or t['detected']):.1f}s",
+    ]
+    print("[TIMING] 생성 완료 → 저장: " + " · ".join(parts))
 
 
 def interrupt_comfyui(prompt_id=None):
@@ -1767,11 +1796,13 @@ def fetch_history_outputs(prompt_id, ws_outputs=None, required_nodes=()):
     return (entry or {}).get("outputs") or {}
 
 
-def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview=False):
+def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview=False, timing=None):
     """prompt_id 작업이 끝날 때까지 기다리며 진행도를 job 에 기록한다.
     - 웹소켓 이벤트(executing/progress/executed/execution_success/error)로 실시간 진행을 추적하고,
     - 웹소켓이 없거나 완료 이벤트를 놓쳐도 3초마다 /history 를 확인해서 반드시 빠져나온다.
     오류/중단 이벤트가 오면 ComfyError 를 던진다."""
+    if timing is None:
+        timing = {}
     nodes_started = 0
     deadline = time.time() + MAX_WAIT_SECONDS
     last_history_check = 0.0
@@ -1833,6 +1864,7 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
 
             elif etype == "executing":
                 if edata.get("node") is None and pid == prompt_id:
+                    timing["detected_by"] = "ws(executing)"
                     set_job(overall=100, step=100)
                     return
                 if pid == prompt_id:
@@ -1844,6 +1876,9 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
                     set_job(**kv)
 
             elif etype == "execution_success" and pid == prompt_id:
+                timing["detected_by"] = "ws(execution_success)"
+                if edata.get("timestamp"):
+                    timing["comfy_done"] = edata["timestamp"] / 1000
                 set_job(overall=100, step=100)
                 return
 
@@ -1862,6 +1897,8 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
         if now - last_history_check >= (5 if ws is not None else 3):
             last_history_check = now
             ids = comfy_queue_prompt_ids()
+            if time.time() - now > 2:
+                print(f"[TIMING] ComfyUI 대기열 확인이 {time.time() - now:.1f}초 걸렸습니다 (그동안 진행 이벤트를 읽지 못함)")
             in_queue = ids is not None and (prompt_id in ids[0] or prompt_id in ids[1])
             if not in_queue:
                 entry = get_history_entry(prompt_id)
@@ -1869,6 +1906,7 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
                     err = history_error_message(entry)
                     if err:
                         raise ComfyError(err)
+                    timing["detected_by"] = "history 확인(웹소켓 " + ("연결됨" if ws is not None else "없음") + ")"
                     set_job(overall=100, step=100)
                     return
                 if ids is not None:
