@@ -3413,12 +3413,9 @@ function setGenerationProgress(overallPct, stepPct) {
 // 진행도 UI(바 + 미리보기 위 퍼센트)를 한꺼번에 보이거나 숨긴다.
 // PC 레이아웃의 진행도 바 위 "단계" 라벨. (모바일에서는 CSS로 숨겨져 있다)
 // 진행 링 가운데의 단계 이름도 같이 바꾼다.
+// 단계는 서버가 알려준 실행 중인 작업의 상태로만 정한다. (생성 중에 Hires 체크박스를 바꿔도 영향 없음)
 function setProgressStageLabel(stage, override) {
-  let text = override;
-  if (!text) {
-    const hiresOn = document.getElementById("hiresEnabled").checked;
-    text = hiresOn ? (stage === "hires" ? "Hires 2 / 2 단계" : "Hires 1 / 2 단계") : "기본 생성";
-  }
+  const text = override || (stage === "hires" ? "Hires" : "기본 생성");
   ["progressStageLabel", "progressRingStage"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.textContent = text;
@@ -3631,9 +3628,7 @@ function queueSourceTag(item) {
 
 function queueStageLabel(item) {
   if (item.kind === "upscale") return "업스케일";
-  const summary = item.summary || {};
-  if (!summary.hires) return "기본 생성";
-  return item.progress && item.progress.stage === "hires" ? "Hires 2 / 2 단계" : "Hires 1 / 2 단계";
+  return item.progress && item.progress.stage === "hires" ? "Hires" : "기본 생성";
 }
 
 function queueMetaParts(item) {
