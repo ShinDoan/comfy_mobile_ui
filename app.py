@@ -1417,6 +1417,56 @@ def fetch_view_bytes(image_info, retries=5):
     raise ComfyError(f"ComfyUI 에서 이미지를 가져오지 못했습니다 ({image_info.get('filename')}): {last_err}")
 
 
+class ViewPrefetch:
+    """ComfyUI 이미지(/view)를 백그라운드에서 미리 받아둔다."""
+
+    def __init__(self, info):
+        self.info = info
+        self.data = None
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        try:
+            self.data = fetch_view_bytes(self.info)
+        except Exception as e:
+            print(f"[WARN] 이미지 미리 받기 실패, 완료 후 다시 받습니다: {e}")
+
+
+# job_id -> {파일명: ViewPrefetch}
+# SaveImage 결과가 나오는 즉시(executed 이벤트) 이미지를 받아둔다. ComfyUI 는 작업이 끝나자마자 다음 작업을
+# 시작하는데, 그때 모델 로딩 등으로 한동안 /view 응답이 멈추는 경우가 있어서 (hires 이전 이미지를 받는 데
+# 30초 제한 2번 초과 = 61초가 걸린 사례), 끝난 뒤에 받으면 그만큼 완료 표시가 늦어진다.
+_view_prefetch = {}
+_view_prefetch_lock = threading.Lock()
+
+
+def start_view_prefetch(job_id, infos):
+    with _view_prefetch_lock:
+        per_job = _view_prefetch.setdefault(job_id, {})
+        for info in infos:
+            if info.get("type", "output") == "output" and info["filename"] not in per_job:
+                per_job[info["filename"]] = ViewPrefetch(info)
+        while len(_view_prefetch) > 8:  # 오래된 작업 것은 버린다
+            _view_prefetch.pop(next(iter(_view_prefetch)))
+
+
+def clear_view_prefetch(job_id):
+    with _view_prefetch_lock:
+        _view_prefetch.pop(job_id, None)
+
+
+def get_view_bytes(job_id, info):
+    """미리 받아둔 이미지가 있으면 그것을(아직 받는 중이면 끝날 때까지 기다려서), 없으면 지금 받는다."""
+    with _view_prefetch_lock:
+        pf = (_view_prefetch.get(job_id) or {}).get(info.get("filename"))
+    if pf is not None:
+        pf.thread.join()
+        if pf.data:
+            return pf.data
+    return fetch_view_bytes(info)
+
+
 def collect_image_infos(node_output):
     """한 노드의 출력(dict)에서 이미지 항목 목록을 뽑는다.
     ComfyUI 버전에 따라 항목에 id/metadata 같은 필드가 더 붙을 수 있으므로,
@@ -1474,6 +1524,7 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None, timing=None):
             if job_id in generation_jobs:
                 generation_jobs[job_id]["prompt_id"] = pid
 
+    clear_view_prefetch(job_id)  # 배치의 이전 이미지 것은 더 쓰지 않는다
     with generation_jobs_lock:
         if job_id in generation_jobs:
             job = generation_jobs[job_id]
@@ -1531,7 +1582,7 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None, timing=None):
         raise ComfyError("ComfyUI 실행은 끝났지만 결과 이미지 정보를 찾지 못했습니다. "
                          f"(history outputs: {json.dumps(outputs, ensure_ascii=False)[:500]})")
 
-    img_bytes = fetch_view_bytes(image_info)
+    img_bytes = get_view_bytes(job_id, image_info)
     timing["view"] = time.time()
     return img_bytes, image_info, outputs
 
@@ -1550,11 +1601,12 @@ def generate_one_image(job_id, data):
     hires_enabled = bool((data.get("hires") or {}).get("enabled"))
     if hires_enabled and "17" in outputs and outputs["17"].get("images"):
         try:
-            pre_hires_bytes = fetch_view_bytes(outputs["17"]["images"][0])
+            pre_hires_bytes = get_view_bytes(job_id, outputs["17"]["images"][0])
         except Exception as e:
             print(f"[WARN] hires 이전 이미지 조회 실패: {e}")
     timing["pre_hires"] = time.time()
 
+    clear_view_prefetch(job_id)
     item = save_generated_image(img_bytes, image_info, data, pre_hires_bytes=pre_hires_bytes)
     log_completion_timing(timing, time.time())
     return item
@@ -1639,6 +1691,7 @@ def run_upscale_job(job_id, source_item, model_name):
         uploaded_name = upload_image_to_comfyui(src_bytes, source_item.get("filename", "upscale_src.png"))
         prompt = build_upscale_prompt(uploaded_name, model_name)
         img_bytes, image_info, _outputs = run_prompt_and_fetch_image(job_id, prompt)
+        clear_view_prefetch(job_id)
 
         # 업스케일 이전 이미지의 생성 설정을 그대로 물려받는다 (재사용 시 원본 설정이 나오도록).
         settings = dict(source_item.get("settings") or {})
@@ -1863,6 +1916,7 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
                 node, output = edata.get("node"), edata.get("output")
                 if node is not None and output:
                     ws_outputs[str(node)] = output
+                    start_view_prefetch(job_id, collect_image_infos(output))
                 if want_preview and str(node) == BASE_PREVIEW_NODE_ID:
                     infos = collect_image_infos(output)
                     if infos:
@@ -1998,7 +2052,7 @@ def api_generate_preview(job_id):
         body, mimetype = cached[1], cached[2]
     else:
         try:
-            body, mimetype = shrink_preview(fetch_view_bytes(info))
+            body, mimetype = shrink_preview(get_view_bytes(job_id, info))
         except Exception as e:
             return jsonify({"error": f"미리보기를 가져오지 못했습니다: {e}"}), 502
         with _preview_cache_lock:
