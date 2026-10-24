@@ -15,6 +15,8 @@ Anima(UNET 로더 기반) / Illustrious(체크포인트 기반) 두 계열을 �
 - [설치 및 실행](#설치-및-실행)
 - [처음 켰을 때 해야 할 설정](#처음-켰을-때-해야-할-설정)
 - [기능 소개](#기능-소개)
+- [PC(가로 화면) 레이아웃](#pc가로-화면-레이아웃)
+- [최근 변경 사항](#최근-변경-사항)
 - [폴더 구조](#폴더-구조)
 - [API 요약](#api-요약)
 - [알려진 한계](#알려진-한계)
@@ -25,7 +27,7 @@ Anima(UNET 로더 기반) / Illustrious(체크포인트 기반) 두 계열을 �
 ## 준비물
 
 - **ComfyUI**가 같은 컴퓨터에서 실행 중이어야 합니다 (`http://127.0.0.1:8188`, `app.py` 상단의 `COMFY_URL`에서 변경 가능).
-- **Python 3.9 이상**
+- **Python 3.9 이상** (필요한 패키지는 `requirements.txt` — Flask, PyYAML, websocket-client, Pillow. `run.bat`이 자동으로 설치합니다)
 - Anima(UNET) 계열과 Illustrious(체크포인트) 계열 모델이 ComfyUI에서 정상적으로 인식되고 있어야 합니다. `extra_model_paths.yaml`로 모델 경로를 잡아둔 상태를 권장합니다.
 
 ## 설치 및 실행
@@ -118,9 +120,10 @@ python app.py
 
 ### 생성 결과
 
-- 생성 중에는 이미지 위에 **동심원 진행 링**(바깥 = 전체, 안쪽 = 현재 단계, 가운데 = 단계 이름과 %)을 표시하고, 배치 여러 장 생성 시 완료 개수를 점으로 표시합니다.
+- 생성 중에는 이미지 위에 **동심원 진행 링**(바깥 = 전체, 안쪽 = 현재 단계, 가운데 = 단계 이름과 %)을 표시합니다. 앞의 작업을 기다리는 동안에는 "대기 중 · N번째", 배치 여러 장 생성 시에는 링 왼쪽 위에 "2 / 4장" 배지가 표시됩니다.
 - 생성된 이미지는 히스토리에 계속 쌓이고, 이전 이미지 설정을 그대로 불러와 재사용하는 버튼 제공
 - 목록에는 작은 JPEG 썸네일(`data/generated_images/thumbs/`, Pillow 필요)을 쓰고, 큰 이미지는 썸네일을 먼저 띄운 뒤 원본 PNG 로 바꿔 끼워서 휴대폰에서도 빨리 뜹니다.
+- 어느 기기에서 생성한 이미지든 저장되는 즉시 목록이 갱신됩니다 (대기열 전체가 끝날 때까지 기다리지 않음).
 - hires 사용 시 base ↔ hires 결과 전환 보기
 - 라이트/다크 모드 자동 대응
 
@@ -134,32 +137,51 @@ python app.py
 ┌ 모델 설정 │ 체크포인트(UNET) 모델 │ CLIP 모델 │ VAE │ CLIP 스킵 ┐   ← 상단 바
 ├───────────────┬─────────────────┬─────────────────────┬────────┤
 │ LoRA          │ 보조 패널        │ 이미지 미리보기     │ 이전   │
-│ 프롬프트      │ (열릴 때만)      │ 진행도 바           │ 생성   │
+│ 프롬프트      │ (열릴 때만)      │ + 동심원 진행 링    │ 생성   │
 │ 해상도/배치   │                  │                     │ 이미지 │
 │ 샘플링        │                  │                     │ (세로) │
 │ Hires/영역별  │                  │                     │        │
+│ [중지][상태]  │                  │                     │        │
 │ [ 생성 ]      │                  │                     │        │
 └───────────────┴─────────────────┴─────────────────────┴────────┘
 ```
 
 - **보조 패널**: 왼쪽 설정 패널과 이미지 영역 사이에 열립니다. 열리면 이미지 영역이 그만큼 옆으로 밀립니다. 한 번에 하나만 열리며, 다른 항목을 누르면 내용이 바뀝니다.
-  - 태그 검색 / 경로 선택 / 모델·LoRA 정보 / 워크플로우 저장·불러오기 / 해상도 프리셋 / 경로 설정
+  - 태그 검색 / 경로 선택 / 모델·LoRA 정보 / 워크플로우 저장·불러오기 / 해상도 프리셋 / 경로 설정 / 대기열 목록
   - **Hires 사용**을 체크하면 Hires 설정, **영역별 프롬프트**(또는 + 영역 추가)를 누르면 영역 편집이 열립니다.
   - Hires 패널을 ✕로 닫아도 Hires *사용* 설정은 유지됩니다. 다시 열려면 Hires 줄의 **설정 열기 ▸**를 누르세요.
-- **진행도**: 이미지 아래 바에서 어두운 층은 *현재 단계*, 밝은 층은 *전체*입니다. 바 위에 단계(`Hires 1 / 2 단계`)와 색상 범례가 표시되고, 퍼센트(`현재% / 전체%`)는 미리보기 중앙에만 표시됩니다.
+- **진행도**: 모바일과 같이 미리보기 중앙의 동심원 링(안쪽 = 현재 단계, 바깥 = 전체)과 생성 버튼 위 상태 블록 테두리로 표시합니다. 이미지 아래의 진행 바는 없앴습니다.
 - **이전 생성 이미지**는 이미지 영역 오른쪽 끝의 세로 컬럼에 쌓이고, 이 컬럼 안에서만 스크롤됩니다. (모바일은 기존처럼 가로 스크롤)
 - **스크롤바**: PC에서는 기본 스크롤바를 숨기고, 스크롤하는 동안에만 오른쪽 가장자리에 iOS 스타일의 얇은 막대가 나타났다 사라집니다. 설정 패널·보조 패널·태그 목록·이전 생성 이미지 등 세로로 스크롤되는 모든 영역에 적용됩니다. (마우스로 막대를 끌 수는 없고, 휠/트랙패드로 스크롤합니다.)
 - **슬라이더**: PC에서는 슬라이더도 iOS 스타일(작은 알약형 흰색 손잡이)로 표시됩니다.
-- **생성/중지 버튼**은 왼쪽 패널 아래에 고정됩니다.
+- **생성 버튼**(대기열이 있으면 그 위에 중지 버튼 + 상태 블록)은 왼쪽 패널 아래에 고정됩니다. 상단 모델 설정 블록은 왼쪽 패널과 같은 너비로 맞춰져 있습니다.
+- Anima ↔ Illustrious를 바꾸면 열려 있던 모델 목록/모델 정보 패널이 먼저 닫혀서, 이전 계열의 모델을 고를 수 없습니다.
 - 구현: `static/css/style.css` 맨 아래 미디어쿼리 + `static/js/pc_layout.js`(보조 패널이 하나만 열리게 관리). 기존 HTML 요소 id와 `base.js` 로직은 그대로이므로 모바일 동작은 바뀌지 않습니다.
+
+## 최근 변경 사항
+
+자세한 내용은 [CHANGELOG.md](CHANGELOG.md)에 있습니다. 이번 작업에서 바뀐 주요 내용은 다음과 같습니다.
+
+- **실행**: `run.bat`이 가상환경을 불러온 뒤 ComfyUI 실행을 확인하고 모바일 UI를 브라우저로 자동으로 엽니다 (`open_browser.py`).
+- **CLIP/VAE 계열별 필터**: 체크포인트·LoRA처럼 CLIP/VAE 목록도 Anima/IL 키워드로 걸러 보여줍니다.
+- **대기열 지원**: 생성 버튼은 항상 대기열에 추가, 중지 버튼(짧게 = 현재 요청, 1초 길게 = 전체 종료) + 테두리 진행도 상태 블록, 대기열 목록(작업별 취소), 다른 작업 진행 중일 때 생성 버튼 회전 빛과 안내 카드, 새로고침 후 진행 중인 작업 이어서 표시.
+- **진행도 표시**: 이미지 위 동심원 진행 링(+ 배치 배지), 진행 링 뒤 블러 연출(이전 이미지가 흐려지고, hires 시 base 이미지가 흐린 상태로 떠서 선명해짐). 이미지 아래 진행 바와 그 빈 공간은 제거.
+- **안정성/속도**
+  - ComfyUI 응답이 늦어도 작업을 놓치지 않음 (`prompt_id` 를 미리 정해서 제출, 응답이 끊기면 대기열/기록에서 다시 찾음)
+  - ComfyUI 요청 줄이기 (`/queue` 1초 공유, 대기 중에는 `/history` 조회 안 함) — `WinError 10054` 대응
+  - 완료 후 ComfyUI 기록을 기다리지 않고 웹소켓으로 받은 결과를 바로 사용, 목록 썸네일, hires base 미리보기 축소 전송
+  - CSS/JS 주소에 버전을 붙여 업데이트 후 예전 파일이 남지 않게 함
+- **PC 레이아웃 정리**: 모델 설정 블록 너비/구분선 정리, 계열 전환 시 모델 목록 패널 자동 닫기.
 
 ## 폴더 구조
 
 ```
 comfyui_mobile_ui/
-├─ app.py                     # Flask 서버 (ComfyUI 프록시, 워크플로우 그래프 생성 등)
+├─ app.py                     # Flask 서버 (ComfyUI 프록시, 워크플로우 그래프 생성, 대기열 등)
 ├─ requirements.txt
-├─ run.bat                    # Windows용 설치+실행 스크립트
+├─ run.bat                    # Windows용 설치+실행 스크립트 (ComfyUI 확인 후 브라우저 자동 실행)
+├─ open_browser.py            # run.bat 이 쓰는 ComfyUI 확인 + 브라우저 열기 스크립트
+├─ CHANGELOG.md               # 변경 내역
 ├─ templates/
 │  └─ base.html
 ├─ static/
@@ -176,6 +198,7 @@ comfyui_mobile_ui/
    ├─ resolution_presets.json
    ├─ workflows/                 # 저장된 워크플로우
    └─ generated_images/          # 생성된 이미지 파일 + index.json
+      └─ thumbs/                 # 목록용 JPEG 썸네일 (자동 생성)
 ```
 
 ## API 요약
@@ -185,13 +208,13 @@ Flask 백엔드가 제공하는 주요 엔드포인트입니다 (전부 `app.py`
 | 분류 | 엔드포인트 |
 |---|---|
 | 생성 | `POST /api/generate`, `GET /api/generate/<job_id>`, `GET /api/generate/<job_id>/preview`, `POST /api/generate/<job_id>/stop` |
-| 대기열 | `GET /api/queue`, `POST /api/queue/stop-current`, `POST /api/queue/cancel` (`job_id` 또는 `prompt_id`), `POST /api/queue/clear` |
+| 대기열 | `GET /api/queue` (대기열 + 내 작업 + 이미지 목록 버전 `images_rev`), `POST /api/queue/stop-current`, `POST /api/queue/cancel` (`job_id` 또는 `prompt_id`), `POST /api/queue/clear` |
 | 모델 목록 | `GET /api/models`, `GET /api/samplers`, `GET /api/upscale-models`, `GET /api/hires-options`, `GET /api/model-info` |
 | 모델 경로 | `GET/POST /api/model-paths`, `POST /api/model-paths/upload`, `POST /api/model-paths/set-base-paths`, `POST /api/model-paths/reset` |
 | 필터 | `GET/POST /api/filter-settings/<kind>` |
 | 워크플로우 | `GET/POST/DELETE /api/workflows`, `GET/DELETE /api/workflows/<id>`, `POST /api/workflows/parse` |
 | 해상도 프리셋 | `GET/POST /api/resolution-presets`, `DELETE /api/resolution-presets/<id>` |
-| 생성 이미지 | `GET /api/generated-images`, `DELETE /api/generated-images/<id>`, `POST /api/generated-images/clear` |
+| 생성 이미지 | `GET /api/generated-images`, `DELETE /api/generated-images/<id>`, `POST /api/generated-images/clear`, `GET /generated-images/<파일명>`, `GET /generated-thumbs/<파일명>` |
 | 태그 자동완성 | `GET /api/tags/autocomplete` |
 | 기기 상태 | `GET/POST /api/state` |
 | 기타 | `POST /api/upscale`, `POST /api/reset` |
@@ -201,7 +224,8 @@ Flask 백엔드가 제공하는 주요 엔드포인트입니다 (전부 `app.py`
 - **img2img / 인페인팅은 아직 없습니다.** 여러 차례 시도했으나 마스크 좌표 계산 관련 버그가 반복되어 이번 버전에서는 제외했습니다. 다시 시도하실 경우 ComfyUI의 마스크가 **이미지 알파 채널 기반**(`mask = 1 - alpha`)이라는 점과, `VAEEncodeForInpaint`가 마스크 영역을 인코딩 전에 회색으로 지워버려 부분 디노이즈와 궁합이 나쁘다는 점(대신 `VAEEncode + SetLatentNoiseMask` 사용 권장)을 참고하시면 좋습니다.
 - **ControlNet은 미구현**입니다. Canny는 서버에서 직접(OpenCV) 처리 가능하지만, 포즈/깊이 등은 신경망 기반 전처리가 필요해 별도 결정이 필요합니다.
 - 이 서버는 **ComfyUI를 직접 실행/재시작할 수 없습니다.** 이미 켜져 있는 ComfyUI에 요청만 보내는 구조라, 커스텀 노드를 새로 설치했다면 ComfyUI를 직접 재시작해야 인식됩니다.
-- 데스크톱(PC 웹) 전용 레이아웃은 기획 단계이며 아직 반응형으로 구현되지 않았습니다.
+- **ComfyUI 화면에서 직접 넣은 작업은 진행도(%)를 알 수 없습니다.** ComfyUI가 진행 이벤트를 작업을 넣은 브라우저 탭에만 보내기 때문이며, 대기열에서는 흐르는 표시와 경과 시간으로만 보여줍니다. (정확한 진행도가 필요하면 진행 이벤트를 모든 연결에 보내 주는 ComfyUI 커스텀 노드가 필요합니다.)
+- 대기 순서 바꾸기(드래그)는 ComfyUI가 지원하지 않아 없습니다.
 
 ## 모바일 접속이 안 될 때 체크리스트
 
