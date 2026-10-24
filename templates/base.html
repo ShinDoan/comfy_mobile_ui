@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>기본 생성 - ComfyUI Mobile UI</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="stylesheet" href="{{ asset_url('css/style.css') }}">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 </head>
 <body>
@@ -92,7 +92,24 @@ margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 �
 
     <div class="section pc-clipvae">
       <div id="animaClipRow" style="margin-bottom:10px;">
-        <label class="label">CLIP 모델</label>
+        <label class="label" style="display:flex; align-items:baseline; gap:6px; flex-wrap:wrap;">
+          <span>CLIP 모델</span>
+          <button id="clipFilterGearBtn" type="button" aria-label="필터링 키워드 설정" style="border:none; background:none; color:var(--text-secondary); font-size:12px; padding:0; display:inline-flex; align-items:center; margin-left:2px;">
+          <i class="ti ti-settings" aria-hidden="true"></i>
+        </button>
+        <span id="clipFilterDisplay" style="font-size:11px; color:var(--text-muted);"></span>
+        </label>
+        <div id="clipFilterPanel" style="display:none; margin-bottom:8px; background:var(--surface-1); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px;">
+          <p style="font-size:12px; color:var(--text-secondary); margin:0 0 6px;">필터링 키워드 (CLIP 경로 텍스트가 이 단어로 시작해야 목록에 표시됩니다. 콤마로 여러 개 입력 가능)</p>
+          <input type="text" id="clipFilterInput" placeholder="예: ANIMA, ANI-V2" style="width:100%; margin-top:0;">
+          <p id="clipFilterDefaultHint" style="font-size:11px; color:var(--text-muted); margin:6px 0 0;"></p>
+          <button id="clipFilterDisableBtn" type="button" style="width:100%; margin-top:8px; border:0.5px dashed var(--border-strong); background:none; color:var(--text-secondary); padding:7px 0; border-radius:var(--radius); font-size:12px;">필터링 사용 안함 (전체 표시)</button>
+          <div style="display:flex; gap:8px; margin-top:10px;">
+            <button id="clipFilterApplyBtn" type="button" style="flex:1; border:none; background:var(--fill-primary); color:var(--on-primary); padding:8px 0; border-radius:var(--radius); font-size:13px;">적용</button>
+            <button id="clipFilterApplyBothBtn" type="button" style="flex:1; border:0.5px solid var(--border-accent); background:none; color:var(--text-accent); padding:8px 0; border-radius:var(--radius); font-size:13px;">일괄 적용</button>
+            <button id="clipFilterCancelBtn" type="button" style="flex:1; border:0.5px solid var(--border); background:none; color:var(--text-secondary); padding:8px 0; border-radius:var(--radius); font-size:13px;">취소</button>
+          </div>
+        </div>
         <div class="searchable-select">
           <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
           <input type="hidden" id="clipSelect">
@@ -100,7 +117,24 @@ margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 �
         </div>
       </div>
       <div class="pc-vae">
-        <label class="label" id="vaeLabel">VAE</label>
+        <label class="label" id="vaeLabel" style="display:flex; align-items:baseline; gap:6px; flex-wrap:wrap;">
+          <span>VAE</span>
+          <button id="vaeFilterGearBtn" type="button" aria-label="필터링 키워드 설정" style="border:none; background:none; color:var(--text-secondary); font-size:12px; padding:0; display:inline-flex; align-items:center; margin-left:2px;">
+          <i class="ti ti-settings" aria-hidden="true"></i>
+        </button>
+        <span id="vaeFilterDisplay" style="font-size:11px; color:var(--text-muted);"></span>
+        </label>
+        <div id="vaeFilterPanel" style="display:none; margin-bottom:8px; background:var(--surface-1); border:0.5px solid var(--border); border-radius:var(--radius); padding:10px;">
+          <p style="font-size:12px; color:var(--text-secondary); margin:0 0 6px;">필터링 키워드 (VAE 경로 텍스트가 이 단어로 시작해야 목록에 표시됩니다. 콤마로 여러 개 입력 가능)</p>
+          <input type="text" id="vaeFilterInput" placeholder="예: ANIMA, ANI-V2" style="width:100%; margin-top:0;">
+          <p id="vaeFilterDefaultHint" style="font-size:11px; color:var(--text-muted); margin:6px 0 0;"></p>
+          <button id="vaeFilterDisableBtn" type="button" style="width:100%; margin-top:8px; border:0.5px dashed var(--border-strong); background:none; color:var(--text-secondary); padding:7px 0; border-radius:var(--radius); font-size:12px;">필터링 사용 안함 (전체 표시)</button>
+          <div style="display:flex; gap:8px; margin-top:10px;">
+            <button id="vaeFilterApplyBtn" type="button" style="flex:1; border:none; background:var(--fill-primary); color:var(--on-primary); padding:8px 0; border-radius:var(--radius); font-size:13px;">적용</button>
+            <button id="vaeFilterApplyBothBtn" type="button" style="flex:1; border:0.5px solid var(--border-accent); background:none; color:var(--text-accent); padding:8px 0; border-radius:var(--radius); font-size:13px;">일괄 적용</button>
+            <button id="vaeFilterCancelBtn" type="button" style="flex:1; border:0.5px solid var(--border); background:none; color:var(--text-secondary); padding:8px 0; border-radius:var(--radius); font-size:13px;">취소</button>
+          </div>
+        </div>
         <div class="searchable-select">
           <input type="text" class="searchable-display" placeholder="검색..." autocomplete="off">
           <input type="hidden" id="vaeSelect">
@@ -373,6 +407,39 @@ margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 �
     </div>
 
     <div id="tagToast" class="tag-toast"></div>
+    <div id="queueToast" class="tag-toast queue-toast" role="status" aria-live="polite"></div>
+
+    <div id="queueBackdrop" class="tag-overlay-backdrop"></div>
+    <div id="queuePanel" class="tag-overlay-panel" role="dialog" aria-modal="true" aria-labelledby="queuePanelTitle">
+      <div class="tag-overlay-handle"></div>
+      <div class="tag-overlay-header">
+        <div class="queue-panel-heading">
+          <span id="queuePanelTitle">대기열</span>
+          <span id="queuePanelSub" class="queue-panel-sub"></span>
+        </div>
+        <button id="queueCloseBtn" type="button" aria-label="닫기" class="tag-overlay-close">✕</button>
+      </div>
+      <div id="queueList" class="queue-list"></div>
+      <div class="queue-panel-foot">
+        <button id="queueClearBtn" type="button" class="queue-clear-btn">
+          <span class="queue-stop-icon" aria-hidden="true"></span>대기열 전체 종료
+        </button>
+      </div>
+    </div>
+
+    <div id="queueConfirm" class="queue-confirm" hidden>
+      <div class="queue-confirm-box" role="alertdialog" aria-modal="true" aria-labelledby="queueConfirmTitle" aria-describedby="queueConfirmDesc">
+        <div class="queue-confirm-head">
+          <span class="queue-confirm-icon" aria-hidden="true"><span class="queue-stop-icon"></span></span>
+          <span id="queueConfirmTitle">대기열 전체를 종료할까요?</span>
+        </div>
+        <p id="queueConfirmDesc"></p>
+        <div class="queue-confirm-actions">
+          <button id="queueConfirmCancel" type="button" class="queue-confirm-cancel">취소</button>
+          <button id="queueConfirmOk" type="button" class="queue-confirm-ok">전체 종료</button>
+        </div>
+      </div>
+    </div>
 
     <div id="pathPickerBackdrop" class="tag-overlay-backdrop"></div>
     <div id="pathPickerPanel" class="tag-overlay-panel">
@@ -548,7 +615,33 @@ margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 �
         <div class="result-stage">
           <div id="resultImage" class="result-image-placeholder">이미지 미리보기</div>
           <div id="progressOverlay" class="progress-overlay" hidden aria-hidden="true">
-            <div class="progress-pill"><b id="progressOverlayNum">0% / 0%</b><span>현재 / 전체</span></div>
+            <span id="batchBadge" class="batch-badge" hidden></span>
+            <!-- 동심원 진행 링: 바깥 = 전체, 안쪽 = 현재 단계 (12시 방향에서 시계 방향으로 찬다) -->
+            <div class="progress-rings">
+              <svg viewBox="0 0 168 168" aria-hidden="true">
+                <circle class="ring-disc" cx="84" cy="84" r="58"></circle>
+                <circle class="ring-track ring-track-overall" cx="84" cy="84" r="76"></circle>
+                <circle id="progressRingOverall" class="ring-arc ring-arc-overall" cx="84" cy="84" r="76" pathLength="100" transform="rotate(-90 84 84)"></circle>
+                <circle class="ring-track ring-track-step" cx="84" cy="84" r="64"></circle>
+                <circle id="progressRingStep" class="ring-arc ring-arc-step" cx="84" cy="84" r="64" pathLength="100" transform="rotate(-90 84 84)"></circle>
+              </svg>
+              <div class="progress-rings-text">
+                <span id="progressRingStage" class="ring-stage"></span>
+                <b id="progressOverlayNum">0%</b>
+                <span id="progressRingOverallText" class="ring-overall">전체 0%</span>
+              </div>
+            </div>
+          </div>
+          <!-- 다른 기기/ComfyUI 의 작업이 돌고 있고, 내 작업도 표시할 이미지도 없을 때 -->
+          <div id="queueBusyCard" class="queue-busy-card" hidden>
+            <div class="queue-busy-msg">
+              <b>ComfyUI에서 다른 작업을 생성하고 있어요</b>
+              <span>지금 생성을 누르면 대기열 뒤에 이어서 진행됩니다</span>
+            </div>
+            <div class="queue-busy-meta">
+              <span id="queueBusyTitle"></span>
+              <span id="queueBusyPrompt"></span>
+            </div>
           </div>
         </div>
         <button id="preHiresToggleBtn" class="delete-image-btn" style="left:8px; right:auto; display:none;" type="button" aria-label="hires 이전 이미지로 전환">
@@ -603,11 +696,33 @@ margin:0 0 6px;">필터링 키워드 (모델 경로 텍스트가 이 단어로 �
 
   <div class="floating-area">
     <div class="floating-inner">
-      <button id="genBtn" type="button">생성</button>
+      <!-- 대기열이 있을 때만 보이는 줄: 중지(짧게 = 현재 작업, 1초 길게 = 전체 종료) + 상태 블록(누르면 대기열 목록) -->
+      <div id="queueRow" class="queue-row" hidden>
+        <div class="queue-stop-wrap">
+          <span id="queueStopHint" class="queue-stop-hint" hidden>계속 누르면 대기열 전체 종료</span>
+          <button id="queueStopBtn" type="button" class="queue-stop-btn" aria-label="중지 (짧게 누르면 현재 작업, 1초 동안 길게 누르면 대기열 전체 종료)">
+            <svg class="press-ring" aria-hidden="true"><path></path></svg>
+            <span class="queue-stop-icon" aria-hidden="true"></span>중지
+          </button>
+        </div>
+        <button id="queueChip" type="button" class="queue-chip" aria-haspopup="dialog" aria-controls="queuePanel">
+          <svg class="queue-chip-ring" aria-hidden="true">
+            <path class="chip-track"></path>
+            <path class="chip-arc chip-arc-step"></path>
+            <path class="chip-arc chip-arc-overall"></path>
+          </svg>
+          <span class="queue-chip-dot" aria-hidden="true"></span>
+          <span id="queueChipText">대기열</span>
+        </button>
+      </div>
+      <div id="genBtnWrap" class="gen-btn-wrap">
+        <span class="gen-btn-glow" aria-hidden="true"></span>
+        <button id="genBtn" type="button">생성</button>
+      </div>
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='js/base.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/pc_layout.js') }}"></script>
+  <script src="{{ asset_url('js/base.js') }}"></script>
+  <script src="{{ asset_url('js/pc_layout.js') }}"></script>
 </body>
 </html>

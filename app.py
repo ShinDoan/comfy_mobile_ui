@@ -1,9 +1,13 @@
 """ComfyUI Mobile UI - Flask 백엔드 (실제 ComfyUI 연동)"""
-import base64, hashlib, json, os, socket, threading, time, urllib.error, urllib.parse, urllib.request, uuid
+import base64, hashlib, io, json, os, socket, threading, time, urllib.error, urllib.parse, urllib.request, uuid
 from datetime import datetime, timezone
 import yaml
 import websocket
-from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask import Flask, jsonify, render_template, request, send_from_directory, url_for
+try:
+    from PIL import Image as PILImage  # 썸네일 생성용 (없으면 원본 이미지를 그대로 쓴다)
+except ImportError:
+    PILImage = None
 
 app = Flask(__name__)
 
@@ -12,7 +16,7 @@ app = Flask(__name__)
 # 오류(4xx/5xx)는 그대로 남긴다. 전부 보고 싶으면 환경변수 MOBILE_UI_VERBOSE=1 로 실행.
 import logging, re as _re
 VERBOSE = os.environ.get("MOBILE_UI_VERBOSE") == "1"
-_QUIET_REQUEST = _re.compile(r'"GET (/api/generate/|/generated-images/|/static/|/api/state|/api/generated-images)[^"]*" [23]\d\d')
+_QUIET_REQUEST = _re.compile(r'"GET (/api/generate/|/generated-images/|/generated-thumbs/|/static/|/api/state|/api/generated-images)[^"]*" [23]\d\d')
 
 _QUIET_STALE_JOB = _re.compile(r'GET /api/generate/[^"]*\S* HTTP[^"]*" 404')
 
@@ -31,6 +35,8 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 STATE_FILE = os.path.join(DATA_DIR, "device_states.json")
 IMAGE_DIR = os.path.join(DATA_DIR, "generated_images")
 IMAGE_INDEX_FILE = os.path.join(IMAGE_DIR, "index.json")
+THUMB_DIR = os.path.join(IMAGE_DIR, "thumbs")
+THUMB_MAX_SIDE = 384  # 이전 생성 이미지 목록 / 큰 이미지가 뜨기 전 자리표시용 (화면 2배 해상도 기준)
 TAGS_FILE = os.path.join(DATA_DIR, "tags.json")
 COOKIE_MAX_AGE = 60 * 60 * 24 * 400
 FIXED = {
@@ -138,9 +144,23 @@ def with_cookie(resp, device_id, is_new):
         resp.set_cookie("device_id", device_id, max_age=COOKIE_MAX_AGE, samesite="Lax")
     return resp
 
+@app.context_processor
+def asset_helpers():
+    def asset_url(filename):
+        """정적 파일 주소에 수정 시각을 붙인다. 업데이트 후에도 브라우저가 예전 JS/CSS 를 계속 쓰는 일을 막는다."""
+        try:
+            version = int(os.path.getmtime(os.path.join(app.static_folder, filename)))
+        except OSError:
+            version = 0
+        return url_for("static", filename=filename, v=version)
+    return {"asset_url": asset_url}
+
+
 @app.route("/")
 def base_page():
-    return render_template("base.html")
+    resp = app.make_response(render_template("base.html"))
+    resp.headers["Cache-Control"] = "no-cache"  # 페이지는 항상 새로 확인 (정적 파일 버전이 여기에 들어 있다)
+    return resp
 
 @app.route("/api/state", methods=["GET"])
 def get_state():
@@ -228,7 +248,7 @@ def get_node_options(node_type, input_name, max_age=15, retries=3):
 
 FILTER_SETTINGS_FILE = os.path.join(DATA_DIR, "filter_settings.json")
 DEFAULT_FILTER_KEYWORDS = {"anima": ["ANIMA"], "il": ["IL"]}
-FILTER_KINDS = ("lora", "checkpoint")
+FILTER_KINDS = ("lora", "checkpoint", "clip", "vae")
 
 
 def _default_family_filter():
@@ -306,13 +326,13 @@ def get_comfyui_models(max_age=15):
         "anima": {
             "checkpoints": apply_filter("checkpoint", "anima", anima_unets),
             "loras": apply_filter("lora", "anima", all_loras),
-            "clips": clips,
-            "vaes": vaes,
+            "clips": apply_filter("clip", "anima", clips),
+            "vaes": apply_filter("vae", "anima", vaes),
         },
         "il": {
             "checkpoints": apply_filter("checkpoint", "il", il_checkpoints),
             "loras": apply_filter("lora", "il", all_loras),
-            "vaes": vaes,
+            "vaes": apply_filter("vae", "il", vaes),
         },
     }
 
@@ -332,7 +352,7 @@ def api_save_filter_settings(kind):
     if kind not in FILTER_KINDS:
         return jsonify({"error": "unknown kind"}), 404
     payload = request.get_json(silent=True) or {}
-    # "일괄 적용": kinds에 ["lora", "checkpoint"]를 지정하면 같은 키워드를 두 종류 모두에 적용한다.
+    # "일괄 적용": kinds에 ["lora", "checkpoint", "clip", "vae"]를 지정하면 같은 키워드를 모든 종류에 적용한다.
     target_kinds = payload.get("kinds") or [kind]
     target_kinds = [k for k in target_kinds if k in FILTER_KINDS]
 
@@ -993,7 +1013,14 @@ def load_image_index():
     except (json.JSONDecodeError, OSError):
         return []
 
+# 생성 이미지 목록이 바뀔 때마다 1씩 올린다. 화면은 대기열을 받아올 때 이 값을 같이 받아서,
+# 바뀌었으면(다른 기기의 작업이 끝났을 때 포함) 이미지 목록을 다시 불러온다.
+image_index_rev = 0
+
+
 def save_image_index(items):
+    global image_index_rev
+    image_index_rev += 1
     os.makedirs(IMAGE_DIR, exist_ok=True)
     tmp = IMAGE_INDEX_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -1022,6 +1049,8 @@ def save_generated_image(img_bytes, image_info, data, pre_hires_bytes=None):
     filename = f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:10]}.png"
     with open(os.path.join(IMAGE_DIR, filename), "wb") as f:
         f.write(img_bytes)
+    # 썸네일은 완료 표시를 늦추지 않도록 따로 만든다 (먼저 요청이 오면 그때 만들어진다).
+    threading.Thread(target=make_thumbnail, args=(filename, img_bytes), daemon=True).start()
 
     pre_hires_filename = ""
     if pre_hires_bytes:
@@ -1061,17 +1090,44 @@ def save_generated_image(img_bytes, image_info, data, pre_hires_bytes=None):
     save_image_index(items)
     return item
 
+def thumb_filename(filename):
+    return os.path.splitext(filename)[0] + ".jpg"
+
+
+def make_thumbnail(filename, img_bytes=None):
+    """생성 이미지의 작은 JPEG 썸네일을 만든다 (이미 있으면 그대로). 성공하면 True.
+    원본 PNG 는 수 MB 라서, 목록에 20장씩 원본을 띄우면 휴대폰에서 목록이 아주 늦게 채워진다."""
+    if PILImage is None or not filename:
+        return False
+    dst = os.path.join(THUMB_DIR, thumb_filename(filename))
+    if os.path.isfile(dst):
+        return True
+    try:
+        os.makedirs(THUMB_DIR, exist_ok=True)
+        src = io.BytesIO(img_bytes) if img_bytes is not None else os.path.join(IMAGE_DIR, filename)
+        with PILImage.open(src) as im:
+            im = im.convert("RGB")
+            im.thumbnail((THUMB_MAX_SIDE, THUMB_MAX_SIDE))
+            tmp = f"{dst}.{uuid.uuid4().hex[:6]}.tmp"
+            im.save(tmp, "JPEG", quality=82, optimize=True)
+        os.replace(tmp, dst)
+        return True
+    except Exception as e:
+        print(f"[WARN] 썸네일 생성 실패 ({filename}): {e}")
+        return False
+
+
 def remove_item_files(item):
     for fname_key in ("filename", "pre_hires_filename"):
         fname = item.get(fname_key)
         if not fname:
             continue
-        path = os.path.join(IMAGE_DIR, fname)
-        if os.path.isfile(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        for path in (os.path.join(IMAGE_DIR, fname), os.path.join(THUMB_DIR, thumb_filename(fname))):
+            if os.path.isfile(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
 
 @app.route("/api/generated-images/<item_id>", methods=["DELETE"])
@@ -1117,12 +1173,31 @@ def api_generated_images():
         if filename and os.path.isfile(os.path.join(IMAGE_DIR, filename)):
             item = dict(item)
             item["url"] = f"/generated-images/{urllib.parse.quote(filename)}"
+            item["thumb_url"] = f"/generated-thumbs/{urllib.parse.quote(filename)}"
             items.append(item)
     return jsonify(items)
 
 @app.route("/generated-images/<path:filename>")
 def generated_image(filename):
-    return send_from_directory(IMAGE_DIR, filename)
+    return immutable(send_from_directory(IMAGE_DIR, filename))
+
+
+@app.route("/generated-thumbs/<path:filename>")
+def generated_thumb(filename):
+    """원본 파일명으로 썸네일을 돌려준다. 예전에 생성된 이미지는 처음 요청될 때 만든다.
+    썸네일을 만들 수 없으면(Pillow 없음 등) 원본을 그대로 보낸다."""
+    if os.path.basename(filename) != filename or not os.path.isfile(os.path.join(IMAGE_DIR, filename)):
+        return jsonify({"error": "not found"}), 404
+    if make_thumbnail(filename):
+        return immutable(send_from_directory(THUMB_DIR, thumb_filename(filename)))
+    return immutable(send_from_directory(IMAGE_DIR, filename))
+
+
+def immutable(resp):
+    # 생성 이미지 파일명은 매번 새로 만들어지고 내용이 바뀌지 않으므로 브라우저가 계속 재사용하게 한다
+    # (기본값은 매번 서버에 다시 확인 → 목록을 그릴 때마다 요청이 수십 개씩 오갔다).
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
 
 # ---------- ComfyUI 워크플로우 생성 ----------
 
@@ -1387,22 +1462,51 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
       아주 빨리 끝나는 작업의 완료 이벤트를 놓쳐서 한참 멈춰 있게 된다."""
     total_nodes = len(prompt)
     client_id = uuid.uuid4().hex
-    ws = open_progress_socket(client_id)
-    try:
-        result = comfy_request_json(f"{COMFY_URL}/prompt", {"prompt": prompt, "client_id": client_id}, timeout=15)
-        prompt_id = result.get("prompt_id")
-        if not prompt_id:
-            raise ComfyError(f"ComfyUI가 프롬프트를 거부했습니다: {result.get('node_errors', result)}")
+    # prompt_id 를 제출 전에 미리 정해서 함께 보낸다 (ComfyUI 가 지원). 그래야 대기열 화면이
+    # 제출 직후부터 이 작업을 "이 앱의 작업"으로 알아보고, 응답이 늦거나 끊겨도 작업을 다시 찾을 수 있다.
+    prompt_id = str(uuid.uuid4())
 
+    def set_prompt_id(pid):
         with generation_jobs_lock:
             if job_id in generation_jobs:
-                job = generation_jobs[job_id]
-                job["overall"] = 0
-                job["step"] = 0
-                job["prompt_id"] = prompt_id
-                # 배치의 이전 이미지에서 남은 미리보기/단계가 다음 이미지에 섞이지 않게 비운다.
-                job.pop("preview_image", None)
-                job.pop("stage", None)
+                generation_jobs[job_id]["prompt_id"] = pid
+
+    with generation_jobs_lock:
+        if job_id in generation_jobs:
+            job = generation_jobs[job_id]
+            job["overall"] = 0
+            job["step"] = 0
+            job["prompt_id"] = prompt_id
+            job["client_id"] = client_id
+            # 배치의 이전 이미지에서 남은 미리보기/단계가 다음 이미지에 섞이지 않게 비운다.
+            job.pop("preview_image", None)
+            job.pop("stage", None)
+
+    ws = open_progress_socket(client_id)
+    try:
+        try:
+            result = comfy_request_json(f"{COMFY_URL}/prompt",
+                                        {"prompt": prompt, "client_id": client_id, "prompt_id": prompt_id}, timeout=60)
+            submitted_id = result.get("prompt_id")
+            if not submitted_id:
+                raise ComfyError(f"ComfyUI가 프롬프트를 거부했습니다: {result.get('node_errors', result)}")
+        except ComfyError:
+            raise  # ComfyUI 가 명시적으로 거부함 (노드 오류 등)
+        except Exception as e:
+            # ComfyUI 가 바쁠 때(앞 작업의 모델 로딩 등) 응답만 늦거나 끊기는 경우가 있다.
+            # 이때 이미 대기열에는 들어가 있으므로, 실패로 끝내지 말고 대기열/기록에서 찾아본다.
+            print(f"[WARN] /prompt 응답을 받지 못해 대기열에서 작업을 찾아봅니다: {e}")
+            submitted_id = None
+            for _ in range(5):
+                submitted_id = find_submitted_prompt(prompt_id, client_id)
+                if submitted_id:
+                    break
+                time.sleep(2)
+            if not submitted_id:
+                raise ComfyError(f"ComfyUI에 작업을 넣지 못했습니다: {e}") from e
+        if submitted_id != prompt_id:  # 미리 정한 id 를 무시하는 구버전 ComfyUI
+            prompt_id = submitted_id
+            set_prompt_id(prompt_id)
 
         ws_outputs = {}
         wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview=bool(HIRES_NODE_IDS & set(prompt)))
@@ -1413,7 +1517,8 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
             except Exception:
                 pass
 
-    outputs = fetch_history_outputs(prompt_id, ws_outputs)
+    save_nodes = [nid for nid, node in prompt.items() if node.get("class_type") == "SaveImage"]
+    outputs = fetch_history_outputs(prompt_id, ws_outputs, required_nodes=save_nodes)
     image_info = pick_image_info(outputs, final_node)
     if not image_info:
         raise ComfyError("ComfyUI 실행은 끝났지만 결과 이미지 정보를 찾지 못했습니다. "
@@ -1443,10 +1548,13 @@ def generate_one_image(job_id, data):
     return save_generated_image(img_bytes, image_info, data, pre_hires_bytes=pre_hires_bytes)
 
 
-def interrupt_comfyui():
-    """지금 ComfyUI에서 실행 중인 작업을 즉시 중단시킨다."""
+def interrupt_comfyui(prompt_id=None):
+    """지금 ComfyUI에서 실행 중인 작업을 즉시 중단시킨다.
+    prompt_id 를 주면 그 작업이 실행 중일 때만 중단한다 (최신 ComfyUI 기준, 구버전은 무시하고 현재 작업을 중단)."""
     try:
-        req = urllib.request.Request(f"{COMFY_URL}/interrupt", data=b"", method="POST")
+        body = json.dumps({"prompt_id": prompt_id}).encode("utf-8") if prompt_id else b""
+        headers = {"Content-Type": "application/json"} if prompt_id else {}
+        req = urllib.request.Request(f"{COMFY_URL}/interrupt", data=body, headers=headers, method="POST")
         urllib.request.urlopen(req, timeout=5)
     except Exception as e:
         print(f"[WARN] ComfyUI 중단 요청 실패: {e}")
@@ -1486,10 +1594,10 @@ def build_upscale_prompt(uploaded_filename, model_name):
 
 def run_upscale_job(job_id, source_item, model_name):
     with generation_jobs_lock:
-        generation_jobs[job_id] = {
+        generation_jobs.setdefault(job_id, {}).update({
             "status": "running", "total": 1, "completed": 0,
             "overall": 0, "step": 0, "images": [], "stop_requested": False,
-        }
+        })
     try:
         src_path = os.path.join(IMAGE_DIR, source_item.get("filename", ""))
         with open(src_path, "rb") as f:
@@ -1510,10 +1618,14 @@ def run_upscale_job(job_id, source_item, model_name):
             generation_jobs[job_id]["completed"] = 1
             generation_jobs[job_id]["status"] = "completed"
     except Exception as e:
-        print(f"[ERROR] 업스케일 작업 {job_id}: {e}")
         with generation_jobs_lock:
-            generation_jobs[job_id]["status"] = "error"
-            generation_jobs[job_id]["error"] = str(e)
+            job = generation_jobs[job_id]
+            if job.get("stop_requested"):
+                job["status"] = "stopped"
+            else:
+                print(f"[ERROR] 업스케일 작업 {job_id}: {e}")
+                job["status"] = "error"
+                job["error"] = str(e)
 
 
 def run_batch_job(job_id, data):
@@ -1528,7 +1640,11 @@ def run_batch_job(job_id, data):
         base_seed = 0
 
     with generation_jobs_lock:
-        generation_jobs[job_id] = {
+        job = generation_jobs.setdefault(job_id, {})
+        if job.get("stop_requested"):  # 시작도 전에 대기열에서 취소된 경우
+            job["status"] = "stopped"
+            return
+        job.update({
             "status": "running",
             "total": total,
             "completed": 0,
@@ -1536,7 +1652,7 @@ def run_batch_job(job_id, data):
             "step": 0,
             "images": [],
             "stop_requested": False,
-        }
+        })
 
     for i in range(total):
         with generation_jobs_lock:
@@ -1589,13 +1705,29 @@ def open_progress_socket(client_id):
         return None
 
 
+_last_comfy_warn = {}
+
+
+def warn_throttled(key, msg, interval=60):
+    """같은 종류의 경고는 interval 초에 한 번만 출력한다 (주기적 확인에서 일시적인 끊김이 반복될 때 로그가 넘치지 않게)."""
+    now = time.time()
+    if now - _last_comfy_warn.get(key, 0) >= interval:
+        _last_comfy_warn[key] = now
+        print(msg)
+
+
 def get_history_entry(prompt_id):
-    """/history/{prompt_id} 의 항목을 반환 (아직 없으면 None)."""
-    try:
-        history = comfy_request_json(f"{COMFY_URL}/history/{urllib.parse.quote(prompt_id)}", timeout=10)
-    except Exception as e:
-        print(f"[WARN] history 조회 실패: {e}")
-        return None
+    """/history/{prompt_id} 의 항목을 반환 (아직 없거나 조회에 실패하면 None).
+    바쁜 ComfyUI 가 연결을 끊는 경우(WinError 10054 등)가 있어 한 번 더 시도하고, 그래도 안 되면 다음 확인 때 다시 본다."""
+    for attempt in range(2):
+        try:
+            history = comfy_request_json(f"{COMFY_URL}/history/{urllib.parse.quote(prompt_id)}", timeout=10)
+            break
+        except Exception as e:
+            if attempt == 1:
+                warn_throttled("history", f"[WARN] history 조회 실패 (다음 확인 때 다시 시도합니다): {e}")
+                return None
+            time.sleep(0.5)
     entry = history.get(prompt_id) if isinstance(history, dict) else None
     return entry or None
 
@@ -1612,9 +1744,13 @@ def history_error_message(entry):
     return "ComfyUI 실행 중 오류가 발생했습니다."
 
 
-def fetch_history_outputs(prompt_id, ws_outputs=None):
-    """완료된 작업의 outputs 를 가져온다. 실행 완료 이벤트와 history 기록 사이의 아주 짧은 틈에
-    비어 있을 수 있으므로 몇 번 재시도하고, 끝내 비어 있으면 웹소켓으로 받아둔 출력으로 대체한다."""
+def fetch_history_outputs(prompt_id, ws_outputs=None, required_nodes=()):
+    """완료된 작업의 outputs 를 가져온다.
+    ComfyUI 는 execution_success 를 보낸 뒤 메모리 정리 등을 마치고 나서야 history 를 기록하므로,
+    필요한 노드(SaveImage)의 결과가 웹소켓(executed 이벤트)으로 이미 다 들어와 있으면 history 를 기다리지 않는다.
+    (캐시되어 executed 가 오지 않은 노드가 있으면 history 를 몇 번 재시도해서 가져온다.)"""
+    if ws_outputs and required_nodes and all((ws_outputs.get(n) or {}).get("images") for n in required_nodes):
+        return ws_outputs
     entry = None
     for _ in range(20):
         entry = get_history_entry(prompt_id)
@@ -1639,6 +1775,7 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
     nodes_started = 0
     deadline = time.time() + MAX_WAIT_SECONDS
     last_history_check = 0.0
+    missing_checks = 0  # history 에도 대기열에도 없는 상태가 연속으로 확인된 횟수
     if ws is not None:
         ws.settimeout(2.0)
 
@@ -1648,6 +1785,13 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
                 generation_jobs[job_id].update(kv)
 
     while time.time() < deadline:
+        # 대기열에서 취소/중지된 작업: 실행 중이었다면 인터럽트를, 대기 중이었다면 대기열 삭제를
+        # 요청한 쪽에서 이미 보냈으므로 여기서는 기다리기만 멈추면 된다.
+        with generation_jobs_lock:
+            stop = (generation_jobs.get(job_id) or {}).get("stop_requested")
+        if stop:
+            raise ComfyError("사용자가 작업을 중지했습니다.")
+
         raw = None
         if ws is not None:
             try:
@@ -1711,29 +1855,56 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
             elif etype == "execution_interrupted" and pid == prompt_id:
                 raise ComfyError("ComfyUI 작업이 중단되었습니다.")
 
-        # 웹소켓 이벤트를 놓쳤더라도 history 에 기록이 생기면 완료로 본다.
+        # 웹소켓 이벤트를 놓쳤을 때를 대비한 확인. 아직 대기열(실행/대기)에 있으면 웹소켓이 완료를
+        # 알려주므로 history 는 묻지 않는다 (ComfyUI 부담을 줄이기 위해). 대기열에서 빠졌을 때만
+        # history 를 보고, history 에도 없으면 ComfyUI 화면 등에서 삭제된 것으로 본다.
         now = time.time()
-        if now - last_history_check >= 3:
+        if now - last_history_check >= (5 if ws is not None else 3):
             last_history_check = now
-            entry = get_history_entry(prompt_id)
-            if entry:
-                err = history_error_message(entry)
-                if err:
-                    raise ComfyError(err)
-                set_job(overall=100, step=100)
-                return
+            ids = comfy_queue_prompt_ids()
+            in_queue = ids is not None and (prompt_id in ids[0] or prompt_id in ids[1])
+            if not in_queue:
+                entry = get_history_entry(prompt_id)
+                if entry:
+                    err = history_error_message(entry)
+                    if err:
+                        raise ComfyError(err)
+                    set_job(overall=100, step=100)
+                    return
+                if ids is not None:
+                    missing_checks += 1
+                    if missing_checks >= 2:
+                        raise ComfyError("ComfyUI 대기열에서 작업이 삭제되었습니다.")
+            else:
+                missing_checks = 0
 
     raise ComfyError("생성 시간이 초과되었습니다 (ComfyUI 응답 없음).")
+
+
+def generation_summary(data):
+    """대기열 목록에 보여줄 요약 정보 (모델, 프롬프트 앞부분, 해상도)."""
+    hires = data.get("hires") or {}
+    return {
+        "title": str(data.get("checkpoint") or ""),
+        "prompt": str(data.get("positivePrompt") or "")[:200],
+        "size": f"{data.get('width')}×{data.get('height')}" if data.get("width") and data.get("height") else "",
+        "hires": bool(hires.get("enabled")),
+        "hires_scale": hires.get("scaleBy"),
+    }
 
 
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
     data = request.get_json(silent=True) or {}
+    device_id, is_new = get_device_id()
     job_id = uuid.uuid4().hex
     with generation_jobs_lock:
-        generation_jobs[job_id] = {"status": "queued", "total": max(1, int(data.get("batch", 1))), "completed": 0, "images": []}
+        generation_jobs[job_id] = {
+            "status": "queued", "total": max(1, int(data.get("batch", 1))), "completed": 0, "images": [],
+            "kind": "generate", "device_id": device_id, "created": time.time(), "summary": generation_summary(data),
+        }
     threading.Thread(target=run_batch_job, args=(job_id, data), daemon=True).start()
-    return jsonify({"job_id": job_id, "status": "queued"})
+    return with_cookie(jsonify({"job_id": job_id, "status": "queued"}), device_id, is_new)
 
 @app.route("/api/generate/<job_id>")
 def api_generate_status(job_id):
@@ -1748,17 +1919,49 @@ def api_generate_status(job_id):
                                  f"?v={urllib.parse.quote(str(result.get('prompt_id', '')))}")
     return jsonify(result)
 
+PREVIEW_MAX_SIDE = 768  # hires 진행 중 흐리게 보여주는 base 이미지라 원본 해상도가 필요 없다
+_preview_cache = {}     # job_id -> (ComfyUI 파일명, 바이트, mimetype)
+_preview_cache_lock = threading.Lock()
+
+
+def shrink_preview(img_bytes):
+    """base 단계 미리보기를 작은 JPEG 로 줄인다. 원본 PNG(수 MB)를 그대로 휴대폰에 보내면
+    hires 가 한참 진행된 뒤에야 미리보기가 떠서, 블러가 서서히 풀리지 않고 갑자기 바뀐다."""
+    if PILImage is None:
+        return img_bytes, "image/png"
+    try:
+        with PILImage.open(io.BytesIO(img_bytes)) as im:
+            im = im.convert("RGB")
+            im.thumbnail((PREVIEW_MAX_SIDE, PREVIEW_MAX_SIDE))
+            out = io.BytesIO()
+            im.save(out, "JPEG", quality=80)
+        return out.getvalue(), "image/jpeg"
+    except Exception as e:
+        print(f"[WARN] 미리보기 축소 실패, 원본을 보냅니다: {e}")
+        return img_bytes, "image/png"
+
+
 @app.route("/api/generate/<job_id>/preview")
 def api_generate_preview(job_id):
     with generation_jobs_lock:
         job = generation_jobs.get(job_id)
-    if not job or not job.get("preview_image"):
+        info = dict(job["preview_image"]) if job and job.get("preview_image") else None
+    if not info:
         return jsonify({"error": "미리보기가 아직 없습니다."}), 404
-    try:
-        img_bytes = fetch_view_bytes(job["preview_image"])
-    except Exception as e:
-        return jsonify({"error": f"미리보기를 가져오지 못했습니다: {e}"}), 502
-    resp = app.response_class(img_bytes, mimetype="image/png")
+    with _preview_cache_lock:
+        cached = _preview_cache.get(job_id)
+    if cached and cached[0] == info.get("filename"):
+        body, mimetype = cached[1], cached[2]
+    else:
+        try:
+            body, mimetype = shrink_preview(fetch_view_bytes(info))
+        except Exception as e:
+            return jsonify({"error": f"미리보기를 가져오지 못했습니다: {e}"}), 502
+        with _preview_cache_lock:
+            _preview_cache[job_id] = (info.get("filename"), body, mimetype)
+            while len(_preview_cache) > 20:  # 오래된 작업의 미리보기는 버린다
+                _preview_cache.pop(next(iter(_preview_cache)))
+    resp = app.response_class(body, mimetype=mimetype)
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
@@ -1770,6 +1973,236 @@ def api_generate_stop(job_id):
             job["stop_requested"] = True
     interrupt_comfyui()
     return jsonify({"ok": True})
+
+# ---------- 대기열 ----------
+# ComfyUI 대기열(/queue)을 기준으로, 이 앱이 넣은 작업(어느 기기에서 넣었는지, 진행도)과
+# ComfyUI 화면 등에서 직접 넣은 작업을 함께 보여주고 취소/중지한다.
+
+queue_first_seen = {}  # prompt_id -> 실행 중으로 처음 확인한 시각 (경과 시간 표시용)
+queue_first_seen_lock = threading.Lock()
+ACTIVE_JOB_STATUSES = ("queued", "running")
+
+
+# 열린 화면 수 × 1초, 작업 수 × 몇 초마다 ComfyUI 에 /queue 를 따로따로 물으면 바쁜 ComfyUI 가
+# 연결을 끊기도 한다. 짧은 시간 동안은 한 번 받아온 결과를 모두가 같이 쓴다.
+QUEUE_CACHE_SECONDS = 1.0
+_queue_cache = {"time": 0.0, "data": None}
+_queue_cache_lock = threading.Lock()
+
+
+def fetch_comfy_queue(max_age=QUEUE_CACHE_SECONDS):
+    with _queue_cache_lock:  # 동시에 여러 요청이 와도 ComfyUI 에는 한 번만 묻는다
+        if _queue_cache["data"] is not None and time.time() - _queue_cache["time"] < max_age:
+            return _queue_cache["data"]
+        data = comfy_request_json(f"{COMFY_URL}/queue", timeout=5)
+        _queue_cache.update(time=time.time(), data=data)
+        return data
+
+
+def invalidate_queue_cache():
+    with _queue_cache_lock:
+        _queue_cache["time"] = 0.0
+
+
+def comfy_queue_prompt_ids(max_age=QUEUE_CACHE_SECONDS):
+    """(실행 중 prompt_id 집합, 대기 중 prompt_id 집합). ComfyUI 에 연결하지 못하면 None."""
+    try:
+        q = fetch_comfy_queue(max_age)
+    except Exception as e:
+        warn_throttled("queue", f"[WARN] ComfyUI 대기열 조회 실패 (다음 확인 때 다시 시도합니다): {e}")
+        return None
+    running = {e[1] for e in q.get("queue_running") or [] if len(e) > 1}
+    pending = {e[1] for e in q.get("queue_pending") or [] if len(e) > 1}
+    return running, pending
+
+
+def comfy_post_queue(payload):
+    """ComfyUI /queue 에 삭제/비우기 요청을 보낸다 (응답 본문이 비어 있어서 JSON 으로 읽지 않는다)."""
+    req = urllib.request.Request(f"{COMFY_URL}/queue", data=json.dumps(payload).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=5).close()
+    finally:
+        invalidate_queue_cache()
+
+
+def find_submitted_prompt(prompt_id, client_id):
+    """제출 응답을 받지 못한 작업을 ComfyUI 대기열/기록에서 prompt_id 또는 client_id 로 찾는다.
+    찾으면 실제 prompt_id, 못 찾으면 None."""
+    def same_client(entry):
+        return len(entry) > 3 and isinstance(entry[3], dict) and entry[3].get("client_id") == client_id
+    try:
+        q = fetch_comfy_queue(max_age=0)
+        for entry in (q.get("queue_running") or []) + (q.get("queue_pending") or []):
+            if len(entry) > 1 and (entry[1] == prompt_id or same_client(entry)):
+                return entry[1]
+    except Exception:
+        pass
+    if get_history_entry(prompt_id):
+        return prompt_id
+    try:
+        history = comfy_request_json(f"{COMFY_URL}/history?max_items=50", timeout=10)
+        for pid, item in (history or {}).items():
+            if same_client(item.get("prompt") or []):
+                return pid
+    except Exception:
+        pass
+    return None
+
+
+def delete_from_comfy_queue(prompt_ids):
+    try:
+        comfy_post_queue({"delete": list(prompt_ids)})
+    except Exception as e:
+        print(f"[WARN] ComfyUI 대기열 삭제 실패: {e}")
+
+
+def summarize_prompt_graph(prompt):
+    """ComfyUI 에서 직접 넣은 작업의 워크플로우에서 모델/프롬프트/해상도를 최대한 뽑아낸다."""
+    title = text = ""
+    width = height = None
+    for node in (prompt or {}).values():
+        if not isinstance(node, dict):
+            continue
+        ct, inp = node.get("class_type"), node.get("inputs") or {}
+        if not title and ct in ("UNETLoader", "CheckpointLoaderSimple"):
+            title = str(inp.get("unet_name") or inp.get("ckpt_name") or "")
+        elif ct == "CLIPTextEncode" and not text and isinstance(inp.get("text"), str):
+            text = inp["text"]
+        elif ct in ("EmptyLatentImage", "EmptySD3LatentImage") and width is None:
+            if isinstance(inp.get("width"), int) and isinstance(inp.get("height"), int):
+                width, height = inp["width"], inp["height"]
+    return {
+        "title": title or "ComfyUI 워크플로우",
+        "prompt": text[:200],
+        "size": f"{width}×{height}" if width else "",
+        "hires": False,
+    }
+
+
+def active_jobs_snapshot():
+    with generation_jobs_lock:
+        return {jid: dict(job) for jid, job in generation_jobs.items() if job.get("status") in ACTIVE_JOB_STATUSES}
+
+
+def job_queue_fields(job_id, job, device_id):
+    total = job.get("total") or 1
+    summary = dict(job.get("summary") or {})
+    if total > 1:
+        summary["batch"] = f"{min(job.get('completed', 0) + 1, total)} / {total}장"
+    return {
+        "job_id": job_id,
+        "kind": job.get("kind", "generate"),
+        "source": "mine" if job.get("device_id") == device_id else "app",
+        "summary": summary,
+    }
+
+
+@app.route("/api/queue")
+def api_queue():
+    device_id, is_new = get_device_id()
+    try:
+        q = fetch_comfy_queue()
+        ok = True
+    except Exception:
+        q, ok = {}, False
+    running_raw = [e for e in q.get("queue_running") or [] if len(e) > 1]
+    pending_raw = sorted((e for e in q.get("queue_pending") or [] if len(e) > 1), key=lambda e: e[0])
+
+    jobs = active_jobs_snapshot()
+    by_prompt = {job["prompt_id"]: (jid, job) for jid, job in jobs.items() if job.get("prompt_id")}
+    by_client = {job["client_id"]: (jid, job) for jid, job in jobs.items() if job.get("client_id")}
+    now = time.time()
+    running_ids = {e[1] for e in running_raw}
+    with queue_first_seen_lock:
+        for pid in list(queue_first_seen):
+            if pid not in running_ids:
+                del queue_first_seen[pid]
+        for pid in running_ids:
+            queue_first_seen.setdefault(pid, now)
+        first_seen = dict(queue_first_seen)
+
+    items, listed_jobs = [], set()
+    for raw, running in [(e, True) for e in running_raw] + [(e, False) for e in pending_raw]:
+        pid = raw[1]
+        item = {"prompt_id": pid, "running": running}
+        jid, job = by_prompt.get(pid, (None, None))
+        if not job and len(raw) > 3 and isinstance(raw[3], dict):
+            jid, job = by_client.get(raw[3].get("client_id"), (None, None))
+        if job:
+            listed_jobs.add(jid)
+            item.update(job_queue_fields(jid, job, device_id))
+            if running:
+                item["progress"] = {"step": job.get("step", 0), "overall": job.get("overall", 0), "stage": job.get("stage")}
+        else:
+            item.update({"source": "comfyui", "summary": summarize_prompt_graph(raw[2] if len(raw) > 2 else {})})
+        if running:
+            item["elapsed"] = round(now - first_seen.get(pid, now))
+        items.append(item)
+
+    # 배치의 다음 장을 아직 ComfyUI 에 넣기 전(장과 장 사이)이거나 막 요청된 작업도 목록에 남겨둔다.
+    # (취소/중지 요청을 받아 곧 끝날 작업은 빼고)
+    for jid, job in sorted(jobs.items(), key=lambda kv: kv[1].get("created", 0)):
+        if jid not in listed_jobs and not job.get("stop_requested"):
+            item = {"prompt_id": None, "running": False, "preparing": True}
+            item.update(job_queue_fields(jid, job, device_id))
+            items.append(item)
+
+    my_jobs = [jid for jid, job in sorted(jobs.items(), key=lambda kv: kv[1].get("created", 0))
+               if job.get("device_id") == device_id]
+    return with_cookie(jsonify({"ok": ok, "items": items, "my_jobs": my_jobs, "images_rev": image_index_rev}),
+                       device_id, is_new)
+
+
+@app.route("/api/queue/stop-current", methods=["POST"])
+def api_queue_stop_current():
+    """중지 버튼을 짧게 눌렀을 때: 지금 실행 중인 작업을 멈춘다.
+    이 앱이 넣은 작업이면 그 요청(배치)의 남은 장도 더 넣지 않는다. 대기 중인 다른 작업은 그대로 진행된다."""
+    ids = comfy_queue_prompt_ids(max_age=0)
+    running = ids[0] if ids else set()
+    with generation_jobs_lock:
+        for job in generation_jobs.values():
+            if job.get("status") in ACTIVE_JOB_STATUSES and job.get("prompt_id") in running:
+                job["stop_requested"] = True
+    interrupt_comfyui(next(iter(running)) if len(running) == 1 else None)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/queue/cancel", methods=["POST"])
+def api_queue_cancel():
+    """대기열 목록의 ✕: 작업 하나를 취소한다. 앱 작업(job_id)이면 요청 전체를, 아니면 그 prompt 만 취소."""
+    payload = request.get_json(silent=True) or {}
+    job_id, prompt_id = payload.get("job_id"), payload.get("prompt_id")
+    if job_id:
+        with generation_jobs_lock:
+            job = generation_jobs.get(job_id)
+            if not job:
+                return jsonify({"error": "작업을 찾을 수 없습니다."}), 404
+            job["stop_requested"] = True
+            prompt_id = job.get("prompt_id")
+    if prompt_id:
+        ids = comfy_queue_prompt_ids(max_age=0)
+        if ids and prompt_id in ids[0]:
+            interrupt_comfyui(prompt_id)
+        elif ids and prompt_id in ids[1]:
+            delete_from_comfy_queue([prompt_id])
+    return jsonify({"ok": True})
+
+
+@app.route("/api/queue/clear", methods=["POST"])
+def api_queue_clear():
+    """중지 버튼을 1초 길게 누른 뒤 확인: 실행 중인 작업과 대기 중인 작업을 모두 종료한다."""
+    with generation_jobs_lock:
+        for job in generation_jobs.values():
+            if job.get("status") in ACTIVE_JOB_STATUSES:
+                job["stop_requested"] = True
+    try:
+        comfy_post_queue({"clear": True})
+    except Exception as e:
+        print(f"[WARN] ComfyUI 대기열 비우기 실패: {e}")
+    interrupt_comfyui()
+    return jsonify({"ok": True})
+
 
 @app.route("/api/upscale", methods=["POST"])
 def api_upscale():
@@ -1783,11 +2216,16 @@ def api_upscale():
     if not source_item:
         return jsonify({"error": "원본 이미지를 찾을 수 없습니다."}), 404
 
+    device_id, is_new = get_device_id()
     job_id = uuid.uuid4().hex
     with generation_jobs_lock:
-        generation_jobs[job_id] = {"status": "queued", "total": 1, "completed": 0, "images": []}
+        generation_jobs[job_id] = {
+            "status": "queued", "total": 1, "completed": 0, "images": [],
+            "kind": "upscale", "device_id": device_id, "created": time.time(),
+            "summary": {"title": "업스케일", "prompt": str(model_name), "size": "", "hires": False},
+        }
     threading.Thread(target=run_upscale_job, args=(job_id, source_item, model_name), daemon=True).start()
-    return jsonify({"job_id": job_id, "status": "queued"})
+    return with_cookie(jsonify({"job_id": job_id, "status": "queued"}), device_id, is_new)
 
 TAG_DATA = []
 

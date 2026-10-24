@@ -37,7 +37,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [3/3] Starting server...
+echo [3/3] Checking ComfyUI and starting server...
+python open_browser.py --check
+if errorlevel 1 (
+    echo [WARN] ComfyUI is not running at http://127.0.0.1:8188 yet.
+    echo        The browser will open automatically once ComfyUI is up.
+) else (
+    echo        ComfyUI is running. The browser will open when the server is ready.
+)
+start "" /b python open_browser.py
 echo.
 python app.py
 

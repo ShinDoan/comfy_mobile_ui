@@ -2,7 +2,7 @@
 //
 // 가로로 긴 화면에서는 "왼쪽 설정 패널"과 "이미지 영역" 사이에 보조 패널이 하나 열린다.
 // 보조 패널이 되는 것:
-//   태그 검색 / 경로 선택 / 모델·LoRA 정보 / 워크플로우 저장·불러오기 / 해상도 프리셋 (기존 바텀시트)
+//   태그 검색 / 경로 선택 / 모델·LoRA 정보 / 워크플로우 저장·불러오기 / 해상도 프리셋 / 대기열 (기존 바텀시트)
 //   경로 설정 / Hires 설정 / 영역별 프롬프트 (기존에는 그 자리에서 펼쳐지던 영역)
 // 이 스크립트는 기존 열기/닫기 코드를 건드리지 않고, 열린 상태를 감시만 한다.
 //   1) 한 번에 하나만 열려 있도록 나머지를 닫고
@@ -18,7 +18,7 @@
   const panels = [];
 
   // 기존 바텀시트 오버레이들: .open 클래스로 열림/닫힘을 관리하고, 닫기 버튼은 .tag-overlay-close
-  ["tagOverlayPanel", "pathPickerPanel", "modelInfoPanel", "wfSavePanel", "wfLoadPanel", "resPresetPanel"].forEach((id) => {
+  ["tagOverlayPanel", "pathPickerPanel", "modelInfoPanel", "wfSavePanel", "wfLoadPanel", "resPresetPanel", "queuePanel"].forEach((id) => {
     const el = $(id);
     if (!el) return;
     panels.push({

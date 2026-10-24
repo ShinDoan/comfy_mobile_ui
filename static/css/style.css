@@ -1465,12 +1465,19 @@ body.scroll-locked {
     min-width: 0;
   }
 
-  /* 모델 설정: 라벨 + 경로설정/초기화 한 줄, 그 아래 Anima|Illustrious */
-  .pc-modelset {
-    width: 270px;
+  /* 모델 설정: 라벨 + 경로설정/초기화 한 줄, 그 아래 Anima|Illustrious.
+     왼쪽 패널과 같은 너비로 상단 바 끝까지 채운다 (체크포인트 선택과의 사이에는 경계선을 두지 않는다) */
+  .pc-topbar > .pc-modelset {
+    width: var(--pc-left);
+    box-sizing: border-box;
     flex-shrink: 0;
+    align-self: stretch;
+    /* 상단 바의 padding(10px 20px)을 상쇄하고, 오른쪽은 gap(14px)과 합쳐 20px 띄운다 */
+    margin: -10px 6px -10px -20px;
+    padding: 10px 16px;
     display: grid;
     grid-template-columns: 1fr auto;
+    align-content: end;
     row-gap: 4px;
     align-items: center;
   }
@@ -1942,5 +1949,810 @@ body.scroll-locked {
 @media (prefers-color-scheme: dark) {
   #pcScrollThumb {
     background: rgba(242, 241, 236, 0.45);
+  }
+}
+
+/* ============================================================
+   대기열: 상태 블록 + 중지 버튼, 생성 버튼 회전 빛, 대기열 목록, 동심원 진행 링
+   ============================================================ */
+:root {
+  --q-step: #1f4fb3;      /* 현재 단계 (진한 파랑) */
+  --q-overall: #8fb3f5;   /* 전체 (연한 파랑) */
+  --q-track: #dcd9cf;
+  --q-danger: #c62f22;
+  --q-danger-soft: #fbe4e0;
+  --q-danger-border: #e2b7b1;
+  --q-mine-bg: #e8eefc;
+  --q-ext-fg: #7a4a12;
+  --q-ext-bg: #fbefdc;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --q-step: #5b8ef5;
+    --q-overall: #b3cbf8;
+    --q-track: #4a473d;
+    --q-danger: #e8705f;
+    --q-danger-soft: #3d2420;
+    --q-danger-border: #6e3a33;
+    --q-mine-bg: #1f2b45;
+    --q-ext-fg: #f0c27a;
+    --q-ext-bg: #3a2e1a;
+  }
+}
+
+/* 상태 블록이 보이는 동안에는 하단 고정 영역이 높아지므로 본문 아래 여백도 늘린다 */
+body.queue-active .page {
+  padding-bottom: 146px;
+}
+
+.queue-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.queue-row[hidden] {
+  display: none;
+}
+
+.queue-row > * {
+  pointer-events: auto;
+}
+
+.queue-stop-wrap {
+  position: relative;
+}
+
+.queue-stop-hint {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  white-space: nowrap;
+  background: var(--fill-primary);
+  color: var(--on-primary);
+  font-size: 11px;
+  border-radius: 6px;
+  padding: 5px 9px;
+  pointer-events: none;
+}
+
+.queue-stop-hint[hidden] {
+  display: none;
+}
+
+.queue-stop-icon {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.queue-stop-btn,
+.queue-clear-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0.5px solid var(--q-danger-border);
+  background: var(--surface-2);
+  color: var(--text-danger);
+  font-weight: 600;
+  font-family: inherit;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  transition: transform 0.12s ease, background-color 0.12s ease;
+}
+
+.queue-stop-btn {
+  width: 72px;
+  height: 38px;
+  border-radius: 999px;
+  font-size: 12px;
+  padding: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.queue-stop-btn:active,
+.queue-clear-btn:active {
+  transform: scale(0.94);
+  background-color: var(--q-danger-soft);
+}
+
+/* 길게 누르는 동안 테두리를 따라 한 바퀴 도는 빨간 선 (왼쪽 가운데에서 시작) */
+.press-ring {
+  position: absolute;
+  left: -0.5px;
+  top: -0.5px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.press-ring path {
+  fill: none;
+  stroke: var(--q-danger);
+  stroke-width: 3;
+  stroke-dasharray: 100 100;
+  stroke-dashoffset: 100;
+}
+
+.queue-chip {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  max-width: 300px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: none;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  border-radius: 999px;
+  padding: 0 16px;
+  font-size: 12px;
+  font-family: inherit;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.queue-chip > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-chip[aria-expanded="true"] {
+  background: var(--q-mine-bg);
+}
+
+.queue-chip-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.queue-chip-ring path {
+  fill: none;
+}
+
+.chip-track {
+  stroke: var(--q-track);
+  stroke-width: 1.5;
+}
+
+.chip-arc {
+  stroke-width: 3;
+  stroke-dasharray: 100 100;
+  stroke-dashoffset: 100;
+  transition: stroke-dashoffset 0.6s linear;
+}
+
+.chip-arc-step {
+  stroke: var(--q-step);
+}
+
+.chip-arc-overall {
+  stroke: var(--q-overall);
+}
+
+/* 진행도를 알 수 없는 작업(ComfyUI 에서 직접 넣은 것): 짧은 선이 위쪽 테두리를 따라 계속 흐른다 */
+.queue-chip.indeterminate .chip-arc-step {
+  stroke-dasharray: 22 78;
+  transition: none;
+  animation: chip-flow 1.6s linear infinite;
+}
+
+.queue-chip.indeterminate .chip-arc-overall {
+  stroke-dashoffset: 100;
+}
+
+@keyframes chip-flow {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+
+.queue-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--q-step);
+  flex-shrink: 0;
+  animation: queue-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes queue-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* 다른 작업이 돌고 있을 때 생성 버튼 테두리를 따라 도는 빛 */
+.gen-btn-wrap {
+  position: relative;
+  border-radius: calc(var(--radius) + 2px);
+  pointer-events: auto;
+}
+
+.gen-btn-glow {
+  display: none;
+}
+
+.gen-btn-wrap.glowing {
+  padding: 2.5px;
+  overflow: hidden;
+  background: #e8b9a6;
+  animation: gen-halo 2.4s ease-in-out infinite;
+}
+
+.gen-btn-wrap.glowing .gen-btn-glow {
+  display: block;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 200%;
+  aspect-ratio: 1;
+  background: conic-gradient(from 0deg, transparent 0deg, transparent 250deg, var(--q-step) 320deg, #ffffff 345deg, var(--q-step) 355deg, transparent 360deg);
+  animation: gen-glow-spin 2.4s linear infinite;
+}
+
+.gen-btn-wrap #genBtn {
+  position: relative;
+}
+
+.gen-btn-wrap.glowing #genBtn {
+  box-shadow: none;
+}
+
+@keyframes gen-glow-spin {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+@keyframes gen-halo {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(47, 111, 237, 0); }
+  50% { box-shadow: 0 0 18px 2px rgba(47, 111, 237, 0.35); }
+}
+
+@media (prefers-color-scheme: dark) {
+  .gen-btn-wrap.glowing {
+    background: #6b3a26;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gen-btn-wrap.glowing,
+  .gen-btn-wrap.glowing .gen-btn-glow,
+  .queue-chip-dot,
+  .queue-chip.indeterminate .chip-arc-step {
+    animation: none;
+  }
+  .gen-btn-wrap.glowing {
+    background: var(--q-step);
+  }
+  .gen-btn-wrap.glowing .gen-btn-glow {
+    display: none;
+  }
+}
+
+/* 미리보기 자리의 "다른 작업 생성 중" 카드 */
+.queue-busy-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-0);
+  border-radius: inherit;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.queue-busy-card[hidden] {
+  display: none;
+}
+
+.queue-busy-msg {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 24px;
+  text-align: center;
+}
+
+.queue-busy-msg b {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.queue-busy-msg span {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.queue-busy-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-top: 0.5px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+
+.queue-busy-meta span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-busy-meta span + span {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* 동심원 진행 링 (이미지 위) */
+.progress-rings {
+  position: relative;
+  width: min(46%, 180px);
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.progress-rings svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.ring-disc {
+  fill: rgba(255, 255, 255, 0.82);
+}
+
+.ring-track,
+.ring-arc {
+  fill: none;
+  stroke-width: 7;
+}
+
+.ring-track-overall {
+  stroke: rgba(255, 255, 255, 0.55);
+}
+
+.ring-track-step {
+  stroke: rgba(31, 79, 179, 0.14);
+}
+
+.ring-arc {
+  stroke-linecap: round;
+  stroke-dasharray: 100 100;
+  stroke-dashoffset: 100;
+  transition: stroke-dashoffset 0.4s linear;
+}
+
+.ring-arc-overall {
+  stroke: var(--q-overall);
+}
+
+.ring-arc-step {
+  stroke: var(--q-step);
+}
+
+.progress-rings-text {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  color: #1b1a17;
+}
+
+.progress-rings-text .ring-stage {
+  font-size: 11px;
+  font-weight: 600;
+  color: #1f4fb3;
+}
+
+.progress-rings-text b {
+  font-family: inherit;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 링이 떠 있는 동안 빈 미리보기의 "이미지 미리보기" 글자가 링 안쪽으로 비치지 않게 한다 */
+.result-stage:has(.progress-overlay:not([hidden])) #resultImage {
+  color: transparent;
+}
+
+.progress-rings-text .ring-overall {
+  font-size: 11px;
+  color: #3d3b35;
+}
+
+/* 이미지 아래 진행 영역은 상태 블록 테두리와 진행 링이 대신하므로 자리까지 통째로 숨긴다.
+   (배치 진행은 링 왼쪽 위의 "2 / 4장" 배지로 보여준다) */
+.progress-track {
+  display: none !important;
+}
+
+.batch-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.9);
+  color: #3d3b35;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.batch-badge[hidden] {
+  display: none;
+}
+
+/* 대기열 목록 */
+.queue-panel-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.queue-panel-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.queue-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.queue-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-top: 6px;
+}
+
+.queue-empty {
+  padding: 28px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.queue-running-card {
+  border: 1px solid #b9cdf3;
+  background: #f4f7fe;
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .queue-running-card {
+    border-color: #34507f;
+    background: #1b2333;
+  }
+}
+
+.queue-running-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.queue-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.queue-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-item-prompt {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.queue-tag {
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: var(--surface-0);
+  color: var(--text-secondary);
+}
+
+.queue-tag.mine {
+  background: var(--q-mine-bg);
+  color: var(--q-step);
+}
+
+.queue-tag.ext {
+  background: var(--q-ext-bg);
+  color: var(--q-ext-fg);
+}
+
+.queue-running-stop {
+  border: 0.5px solid var(--q-danger-border);
+  background: var(--surface-2);
+  color: var(--text-danger);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  flex-shrink: 0;
+}
+
+.queue-bar-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.queue-bar-label b {
+  color: var(--q-step);
+  font-weight: 600;
+}
+
+.queue-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(31, 79, 179, 0.12);
+  overflow: hidden;
+  position: relative;
+}
+
+.queue-bar > i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  transition: width 0.4s linear;
+}
+
+.queue-bar.step > i {
+  background: var(--q-step);
+}
+
+.queue-bar.overall > i {
+  background: var(--q-overall);
+}
+
+.queue-bar.indeterminate > i {
+  width: 35%;
+  background: var(--q-step);
+  animation: queue-bar-flow 1.4s ease-in-out infinite;
+}
+
+@keyframes queue-bar-flow {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+
+.queue-pending-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0.5px solid var(--border-strong);
+  background: var(--surface-2);
+  border-radius: 12px;
+  padding: 8px 4px 8px 10px;
+}
+
+.queue-pending-row.mine {
+  border: 1px solid var(--q-step);
+}
+
+.queue-pos {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--surface-0);
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.queue-cancel-btn {
+  width: 44px;
+  height: 44px;
+  border: none;
+  background: none;
+  color: var(--text-danger);
+  border-radius: 10px;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.queue-cancel-btn:active {
+  background: var(--q-danger-soft);
+}
+
+.queue-panel-foot {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px 18px;
+  border-top: 0.5px solid var(--border);
+}
+
+.queue-clear-btn {
+  width: 100%;
+  height: 46px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+/* 대기열 전체 종료 확인 창 */
+.queue-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(27, 26, 23, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.queue-confirm[hidden] {
+  display: none;
+}
+
+.queue-confirm-box {
+  width: 100%;
+  max-width: 360px;
+  background: var(--surface-2);
+  border-radius: 14px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.queue-confirm-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.queue-confirm-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--q-danger-soft);
+  color: var(--text-danger);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.queue-confirm-box p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.queue-confirm-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.queue-confirm-actions button {
+  flex: 1;
+  min-height: 44px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.queue-confirm-cancel {
+  border: 0.5px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.queue-confirm-ok {
+  border: none;
+  background: var(--text-danger);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.queue-toast {
+  bottom: 160px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  white-space: normal;
+  text-align: center;
+}
+
+/* PC: 생성 버튼 줄이 상태 블록만큼 높아진다 */
+@media (min-aspect-ratio: 1/1) and (min-width: 900px) {
+  body.queue-active {
+    --pc-gen-h: 118px;
+  }
+
+  body.queue-active .page {
+    padding-bottom: 0;
+  }
+
+  .floating-area .floating-inner {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .queue-row {
+    margin-bottom: 10px;
+  }
+
+  .queue-stop-btn,
+  .queue-chip {
+    height: 34px;
+    box-shadow: none;
+  }
+
+  .queue-toast {
+    left: calc(var(--pc-left) / 2);
+    bottom: 132px;
   }
 }
