@@ -3979,6 +3979,24 @@ function initGenerate(seedApi) {
   const resultBlurEffectEnabled = true;
   const MAX_RESULT_BLUR = 16;
 
+  // 진행률(0~100)을 10% 단위로 내린다. 블러는 이 단계가 바뀔 때만 다시 계산되어,
+  // 0.5초마다 오는 진행도마다 큰 이미지를 다시 흐리게 그리지 않는다.
+  const blurLevel = (pct) => Math.max(0, Math.min(10, Math.floor((pct || 0) / 10)));
+
+  // 이미지에 블러를 건다. 값이 그대로면 아무것도 하지 않는다 (같은 값을 다시 넣어도 다시 그리는 브라우저가 있다).
+  // 블러가 걸린 동안은 이미지를 별도 레이어로 올려서, 블러 세기가 바뀔 때 테두리·픽셀 위치가
+  // 흔들려 보이는 것(떨림)을 막는다.
+  function setResultBlur(img, px, transition) {
+    const value = px > 0 ? `blur(${px.toFixed(1)}px)` : "none";
+    if (img.dataset.blur === value) return;
+    img.dataset.blur = value;
+    if (transition) img.style.transition = transition;
+    img.style.willChange = px > 0 ? "filter" : "";
+    img.style.transform = px > 0 ? "translateZ(0)" : "";
+    img.style.backfaceVisibility = px > 0 ? "hidden" : "";
+    img.style.filter = value;
+  }
+
   // ComfyUI 에서 지금 실행 중인 내 작업이 있으면 그것을, 없으면 지금 보던 작업(또는 가장 먼저 넣은 작업)을 그린다.
   function chooseFocus() {
     const runningMine = queueState.items.find((it) => it.running && it.job_id && watchers.has(it.job_id));
@@ -4100,7 +4118,7 @@ function initGenerate(seedApi) {
             previewImg.src = probe.src;
             // 미리보기가 조금 늦게 도착해도 블러가 갑자기 바뀌지 않고 현재 hires 진행도까지 부드럽게 풀리도록 조금 길게
             previewImg.style.transition = "filter 0.6s ease-out";
-            if (resultBlurEffectEnabled) previewImg.style.filter = `blur(${MAX_RESULT_BLUR}px)`;
+            if (resultBlurEffectEnabled) setResultBlur(previewImg, MAX_RESULT_BLUR);
             resultImage.appendChild(previewImg);
             previewShown = true;
             maxStepSeen = 0;
@@ -4117,13 +4135,14 @@ function initGenerate(seedApi) {
         const previewImg = document.getElementById("hiresPreviewImg");
         if (previewImg) {
           if (!resultBlurEffectEnabled) {
-            previewImg.style.filter = "none";
+            setResultBlur(previewImg, 0);
           } else {
             // base 이미지는 처음부터 최대로 흐린 상태로 보여주고(예전에는 hires 진행률 5% 전까지 잠깐
             // 선명하게 보였다가 확 흐려졌다), hires 진행률의 최고값을 따라 점점 선명해진다.
             // 최고값만 쓰므로 노드가 바뀌어 step 이 0 으로 돌아가도 다시 흐려지지 않는다.
+            // 10% 단위로만 풀린다 (0~9% → 최대 블러, 10~19% → 90%, …).
             if (status.stage === "hires") maxStepSeen = Math.max(maxStepSeen, status.step != null ? status.step : 0);
-            previewImg.style.filter = `blur(${(MAX_RESULT_BLUR * (1 - maxStepSeen / 100)).toFixed(1)}px)`;
+            setResultBlur(previewImg, MAX_RESULT_BLUR * (1 - blurLevel(maxStepSeen) / 10));
           }
         }
       } else if (focused && resultBlurEffectEnabled && !finished) {
@@ -4139,8 +4158,7 @@ function initGenerate(seedApi) {
           // hires 단계로 넘어갔으면 base 생성은 끝난 것이므로 최대로 흐리게 (base 미리보기가 같은 세기에서 이어받는다)
           const stepPct = status.stage === "hires" ? 100 : status.step != null ? status.step : 0;
           maxStepSeen = Math.max(maxStepSeen, stepPct);
-          oldImg.style.transition = "filter 0.2s linear";
-          oldImg.style.filter = `blur(${Math.min(MAX_RESULT_BLUR, (maxStepSeen / 100) * MAX_RESULT_BLUR)}px)`;
+          setResultBlur(oldImg, (blurLevel(maxStepSeen) / 10) * MAX_RESULT_BLUR, "filter 0.4s ease-out");
         }
       }
 
@@ -4152,7 +4170,7 @@ function initGenerate(seedApi) {
       if (status.status === "stopped" || status.status === "error") {
         previewEpoch++;
         // 생성 중에 걸어둔 블러가 이전 이미지에 그대로 남지 않게 푼다.
-        if (focused) resultImage.querySelectorAll("img").forEach((im) => (im.style.filter = "none"));
+        if (focused) resultImage.querySelectorAll("img").forEach((im) => setResultBlur(im, 0));
         if (status.status === "error") throw new Error(status.error || "생성 실패");
         if (showFinal) resultStatus.textContent = `중지됨 · ${completed} / ${total} 생성됨`;
         return;
