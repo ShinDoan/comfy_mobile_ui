@@ -2384,10 +2384,27 @@ body.queue-active .page {
   color: #3d3b35;
 }
 
-/* 하단 진행 바는 상태 블록 테두리와 진행 링이 대신하므로 숨긴다 (배치 점만 남김) */
-.progress-track .progress-meta,
-.progress-track .progress-meter {
+/* 이미지 아래 진행 영역은 상태 블록 테두리와 진행 링이 대신하므로 자리까지 통째로 숨긴다.
+   (배치 진행은 링 왼쪽 위의 "2 / 4장" 배지로 보여준다) */
+.progress-track {
   display: none !important;
+}
+
+.batch-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.9);
+  color: #3d3b35;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.batch-badge[hidden] {
+  display: none;
 }
 
 /* 대기열 목록 */

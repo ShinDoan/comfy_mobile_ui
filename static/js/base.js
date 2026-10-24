@@ -3408,6 +3408,8 @@ function setProgressStageLabel(stage, override) {
 
 function showProgress(labelOverride) {
   setProgressStageLabel(null, labelOverride);
+  const badge = document.getElementById("batchBadge");
+  if (badge) badge.hidden = true;
   document.getElementById("progressTrack").style.display = "flex";
   const ov = document.getElementById("progressOverlay");
   if (ov) ov.hidden = false;
@@ -3420,6 +3422,11 @@ function hideProgress() {
 }
 
 function renderBatchDots(completed, total) {
+  const badge = document.getElementById("batchBadge");
+  if (badge) {
+    badge.hidden = total <= 1;
+    badge.textContent = `${Math.min(completed + 1, total)} / ${total}장`;
+  }
   const row = document.getElementById("batchDots");
   row.innerHTML = "";
   if (total <= 1) return;
