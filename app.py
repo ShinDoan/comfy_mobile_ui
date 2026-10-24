@@ -1,9 +1,13 @@
 """ComfyUI Mobile UI - Flask 백엔드 (실제 ComfyUI 연동)"""
-import base64, hashlib, json, os, socket, threading, time, urllib.error, urllib.parse, urllib.request, uuid
+import base64, hashlib, io, json, os, socket, threading, time, urllib.error, urllib.parse, urllib.request, uuid
 from datetime import datetime, timezone
 import yaml
 import websocket
 from flask import Flask, jsonify, render_template, request, send_from_directory, url_for
+try:
+    from PIL import Image as PILImage  # 썸네일 생성용 (없으면 원본 이미지를 그대로 쓴다)
+except ImportError:
+    PILImage = None
 
 app = Flask(__name__)
 
@@ -12,7 +16,7 @@ app = Flask(__name__)
 # 오류(4xx/5xx)는 그대로 남긴다. 전부 보고 싶으면 환경변수 MOBILE_UI_VERBOSE=1 로 실행.
 import logging, re as _re
 VERBOSE = os.environ.get("MOBILE_UI_VERBOSE") == "1"
-_QUIET_REQUEST = _re.compile(r'"GET (/api/generate/|/generated-images/|/static/|/api/state|/api/generated-images)[^"]*" [23]\d\d')
+_QUIET_REQUEST = _re.compile(r'"GET (/api/generate/|/generated-images/|/generated-thumbs/|/static/|/api/state|/api/generated-images)[^"]*" [23]\d\d')
 
 _QUIET_STALE_JOB = _re.compile(r'GET /api/generate/[^"]*\S* HTTP[^"]*" 404')
 
@@ -31,6 +35,8 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 STATE_FILE = os.path.join(DATA_DIR, "device_states.json")
 IMAGE_DIR = os.path.join(DATA_DIR, "generated_images")
 IMAGE_INDEX_FILE = os.path.join(IMAGE_DIR, "index.json")
+THUMB_DIR = os.path.join(IMAGE_DIR, "thumbs")
+THUMB_MAX_SIDE = 384  # 이전 생성 이미지 목록 / 큰 이미지가 뜨기 전 자리표시용 (화면 2배 해상도 기준)
 TAGS_FILE = os.path.join(DATA_DIR, "tags.json")
 COOKIE_MAX_AGE = 60 * 60 * 24 * 400
 FIXED = {
@@ -1043,6 +1049,8 @@ def save_generated_image(img_bytes, image_info, data, pre_hires_bytes=None):
     filename = f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:10]}.png"
     with open(os.path.join(IMAGE_DIR, filename), "wb") as f:
         f.write(img_bytes)
+    # 썸네일은 완료 표시를 늦추지 않도록 따로 만든다 (먼저 요청이 오면 그때 만들어진다).
+    threading.Thread(target=make_thumbnail, args=(filename, img_bytes), daemon=True).start()
 
     pre_hires_filename = ""
     if pre_hires_bytes:
@@ -1082,17 +1090,44 @@ def save_generated_image(img_bytes, image_info, data, pre_hires_bytes=None):
     save_image_index(items)
     return item
 
+def thumb_filename(filename):
+    return os.path.splitext(filename)[0] + ".jpg"
+
+
+def make_thumbnail(filename, img_bytes=None):
+    """생성 이미지의 작은 JPEG 썸네일을 만든다 (이미 있으면 그대로). 성공하면 True.
+    원본 PNG 는 수 MB 라서, 목록에 20장씩 원본을 띄우면 휴대폰에서 목록이 아주 늦게 채워진다."""
+    if PILImage is None or not filename:
+        return False
+    dst = os.path.join(THUMB_DIR, thumb_filename(filename))
+    if os.path.isfile(dst):
+        return True
+    try:
+        os.makedirs(THUMB_DIR, exist_ok=True)
+        src = io.BytesIO(img_bytes) if img_bytes is not None else os.path.join(IMAGE_DIR, filename)
+        with PILImage.open(src) as im:
+            im = im.convert("RGB")
+            im.thumbnail((THUMB_MAX_SIDE, THUMB_MAX_SIDE))
+            tmp = f"{dst}.{uuid.uuid4().hex[:6]}.tmp"
+            im.save(tmp, "JPEG", quality=82, optimize=True)
+        os.replace(tmp, dst)
+        return True
+    except Exception as e:
+        print(f"[WARN] 썸네일 생성 실패 ({filename}): {e}")
+        return False
+
+
 def remove_item_files(item):
     for fname_key in ("filename", "pre_hires_filename"):
         fname = item.get(fname_key)
         if not fname:
             continue
-        path = os.path.join(IMAGE_DIR, fname)
-        if os.path.isfile(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        for path in (os.path.join(IMAGE_DIR, fname), os.path.join(THUMB_DIR, thumb_filename(fname))):
+            if os.path.isfile(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
 
 @app.route("/api/generated-images/<item_id>", methods=["DELETE"])
@@ -1138,12 +1173,31 @@ def api_generated_images():
         if filename and os.path.isfile(os.path.join(IMAGE_DIR, filename)):
             item = dict(item)
             item["url"] = f"/generated-images/{urllib.parse.quote(filename)}"
+            item["thumb_url"] = f"/generated-thumbs/{urllib.parse.quote(filename)}"
             items.append(item)
     return jsonify(items)
 
 @app.route("/generated-images/<path:filename>")
 def generated_image(filename):
-    return send_from_directory(IMAGE_DIR, filename)
+    return immutable(send_from_directory(IMAGE_DIR, filename))
+
+
+@app.route("/generated-thumbs/<path:filename>")
+def generated_thumb(filename):
+    """원본 파일명으로 썸네일을 돌려준다. 예전에 생성된 이미지는 처음 요청될 때 만든다.
+    썸네일을 만들 수 없으면(Pillow 없음 등) 원본을 그대로 보낸다."""
+    if os.path.basename(filename) != filename or not os.path.isfile(os.path.join(IMAGE_DIR, filename)):
+        return jsonify({"error": "not found"}), 404
+    if make_thumbnail(filename):
+        return immutable(send_from_directory(THUMB_DIR, thumb_filename(filename)))
+    return immutable(send_from_directory(IMAGE_DIR, filename))
+
+
+def immutable(resp):
+    # 생성 이미지 파일명은 매번 새로 만들어지고 내용이 바뀌지 않으므로 브라우저가 계속 재사용하게 한다
+    # (기본값은 매번 서버에 다시 확인 → 목록을 그릴 때마다 요청이 수십 개씩 오갔다).
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
 
 # ---------- ComfyUI 워크플로우 생성 ----------
 
@@ -1463,7 +1517,8 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
             except Exception:
                 pass
 
-    outputs = fetch_history_outputs(prompt_id, ws_outputs)
+    save_nodes = [nid for nid, node in prompt.items() if node.get("class_type") == "SaveImage"]
+    outputs = fetch_history_outputs(prompt_id, ws_outputs, required_nodes=save_nodes)
     image_info = pick_image_info(outputs, final_node)
     if not image_info:
         raise ComfyError("ComfyUI 실행은 끝났지만 결과 이미지 정보를 찾지 못했습니다. "
@@ -1689,9 +1744,13 @@ def history_error_message(entry):
     return "ComfyUI 실행 중 오류가 발생했습니다."
 
 
-def fetch_history_outputs(prompt_id, ws_outputs=None):
-    """완료된 작업의 outputs 를 가져온다. 실행 완료 이벤트와 history 기록 사이의 아주 짧은 틈에
-    비어 있을 수 있으므로 몇 번 재시도하고, 끝내 비어 있으면 웹소켓으로 받아둔 출력으로 대체한다."""
+def fetch_history_outputs(prompt_id, ws_outputs=None, required_nodes=()):
+    """완료된 작업의 outputs 를 가져온다.
+    ComfyUI 는 execution_success 를 보낸 뒤 메모리 정리 등을 마치고 나서야 history 를 기록하므로,
+    필요한 노드(SaveImage)의 결과가 웹소켓(executed 이벤트)으로 이미 다 들어와 있으면 history 를 기다리지 않는다.
+    (캐시되어 executed 가 오지 않은 노드가 있으면 history 를 몇 번 재시도해서 가져온다.)"""
+    if ws_outputs and required_nodes and all((ws_outputs.get(n) or {}).get("images") for n in required_nodes):
+        return ws_outputs
     entry = None
     for _ in range(20):
         entry = get_history_entry(prompt_id)

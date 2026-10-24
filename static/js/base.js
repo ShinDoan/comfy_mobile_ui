@@ -3186,9 +3186,20 @@ function renderCurrentImage(item, animate) {
     resultImage.style.aspectRatio = `${item.settings.width} / ${item.settings.height}`;
   }
 
+  // 작은 썸네일을 먼저 띄우고, 원본 PNG 를 다 받으면 바꿔 끼운다 (원본은 수 MB 라 휴대폰에서 한참 걸린다).
   const img = document.createElement("img");
-  img.src = item.url;
   img.alt = "생성된 이미지";
+  img.decoding = "async";
+  if (item.thumb_url) {
+    img.src = item.thumb_url;
+    const full = new Image();
+    full.onload = () => {
+      if (img.isConnected && currentHiresUrl === item.url && !viewingPreHires) img.src = full.src;
+    };
+    full.src = item.url;
+  } else {
+    img.src = item.url;
+  }
   resultImage.appendChild(img);
   resultStatus.textContent = `생성 완료 · ${item.created_at || ""}`;
 
@@ -3297,6 +3308,10 @@ async function deleteImage(id) {
 
 function renderHistory(items) {
   const history = document.getElementById("imageHistory");
+  // 목록이 그대로면 다시 그리지 않는다 (갱신 신호가 자주 와도 썸네일을 다시 받아 그리지 않도록).
+  const signature = items.map((it) => it.id).join(",");
+  if (history.dataset.signature === signature && history.childElementCount) return;
+  history.dataset.signature = signature;
   history.innerHTML = "";
 
   if (!items.length) {
@@ -3314,9 +3329,10 @@ function renderHistory(items) {
     setGlowStill(card, kind);
 
     const img = document.createElement("img");
-    img.src = item.url;
+    img.src = item.thumb_url || item.url; // 원본 PNG(수 MB) 대신 작은 썸네일
     img.alt = "이전 생성 이미지";
     img.loading = "lazy";
+    img.decoding = "async";
 
     const meta = document.createElement("span");
     meta.className = "history-meta";
@@ -3351,6 +3367,9 @@ async function loadGeneratedImages(options = {}) {
     if (items.length) {
       renderCurrentImage(items[0], false);
       const firstCard = document.querySelector("#imageHistory .history-card");
+      if (selectedThumbEl && selectedThumbEl !== firstCard && selectedThumbEl.isConnected) {
+        setGlowStill(selectedThumbEl, selectedThumbEl.dataset.glowKind);
+      }
       if (firstCard) {
         firstCard.dataset.glowKind = glowKind(items[0]);
         setGlowSelected(firstCard, glowKind(items[0]), false);
@@ -3960,8 +3979,10 @@ function initGenerate(seedApi) {
   const watchers = new Map();
   let focusedJobId = null;
 
-  // 생성 중 블러 연출 on/off. 지금은 기본값 off로 두고, 토글 버튼은 나중에 추가한다.
-  let resultBlurEffectEnabled = false;
+  // 생성 중 블러 연출 (진행 링 뒤): 일반 생성 중에는 화면에 남은 이전 이미지가 점점 흐려지고,
+  // hires 사용 시에는 base 단계 이미지가 흐린 상태로 나타났다가 hires 진행도에 따라 선명해진다.
+  const resultBlurEffectEnabled = true;
+  const MAX_RESULT_BLUR = 16;
 
   // ComfyUI 에서 지금 실행 중인 내 작업이 있으면 그것을, 없으면 지금 보던 작업(또는 가장 먼저 넣은 작업)을 그린다.
   function chooseFocus() {
@@ -4021,8 +4042,8 @@ function initGenerate(seedApi) {
     let previewEpoch = 0; // 한 장이 끝날 때마다 올려서, 늦게 도착한 이전 미리보기를 무시한다
     let maxStepSeen = 0; // 노드가 바뀌면서 step이 0으로 리셋되어도, 블러가 도로 풀리지 않도록 최고값만 추적
     let wasFocused = false;
-    for (let i = 0; i < 9000; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 800));
+    for (let i = 0; i < 15000; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
       const statusRes = await fetch(`/api/generate/${encodeURIComponent(jobId)}`);
       if (statusRes.status === 404) return; // 서버가 재시작되어 작업 기록이 사라진 경우
       if (!statusRes.ok) continue;
@@ -4081,6 +4102,7 @@ function initGenerate(seedApi) {
             previewImg.alt = "생성 중 미리보기";
             previewImg.src = probe.src;
             previewImg.style.transition = "filter 0.2s linear";
+            if (resultBlurEffectEnabled) previewImg.style.filter = `blur(${MAX_RESULT_BLUR}px)`;
             resultImage.appendChild(previewImg);
             previewShown = true;
             maxStepSeen = 0;
@@ -4098,21 +4120,12 @@ function initGenerate(seedApi) {
         if (previewImg) {
           if (!resultBlurEffectEnabled) {
             previewImg.style.filter = "none";
-          } else if (status.stage === "hires") {
-            const stepPct = status.step != null ? status.step : 0;
-            maxStepSeen = Math.max(maxStepSeen, stepPct);
-            // hires 진입 직후 바로 블러가 훅 들어가면 어색하니, 진행률이 5%를
-            // 넘어선 순간부터 블러를 시작한다. 이후로는 최고 진행률 기준으로만
-            // 줄어들어서(절대 다시 늘어나지 않음) 이전 이미지가 화면에 남아있는
-            // 동안 블러가 풀렸다 다시 들어가는 일이 없게 한다.
-            if (maxStepSeen <= 5) {
-              previewImg.style.filter = "none";
-            } else {
-              const adjusted = (maxStepSeen - 5) / 95;
-              previewImg.style.filter = `blur(${Math.max(0, 16 * (1 - adjusted))}px)`;
-            }
           } else {
-            previewImg.style.filter = "none";
+            // base 이미지는 처음부터 최대로 흐린 상태로 보여주고(예전에는 hires 진행률 5% 전까지 잠깐
+            // 선명하게 보였다가 확 흐려졌다), hires 진행률의 최고값을 따라 점점 선명해진다.
+            // 최고값만 쓰므로 노드가 바뀌어 step 이 0 으로 돌아가도 다시 흐려지지 않는다.
+            if (status.stage === "hires") maxStepSeen = Math.max(maxStepSeen, status.step != null ? status.step : 0);
+            previewImg.style.filter = `blur(${(MAX_RESULT_BLUR * (1 - maxStepSeen / 100)).toFixed(1)}px)`;
           }
         }
       } else if (focused && resultBlurEffectEnabled && !finished) {
@@ -4128,7 +4141,7 @@ function initGenerate(seedApi) {
           const stepPct = status.step != null ? status.step : 0;
           maxStepSeen = Math.max(maxStepSeen, stepPct);
           oldImg.style.transition = "filter 0.2s linear";
-          oldImg.style.filter = `blur(${Math.min(16, (maxStepSeen / 100) * 16)}px)`;
+          oldImg.style.filter = `blur(${Math.min(MAX_RESULT_BLUR, (maxStepSeen / 100) * MAX_RESULT_BLUR)}px)`;
         }
       }
 
@@ -4137,14 +4150,13 @@ function initGenerate(seedApi) {
         if (showFinal) resultStatus.textContent = `${total} / ${total} 생성 완료`;
         return;
       }
-      if (status.status === "stopped") {
+      if (status.status === "stopped" || status.status === "error") {
         previewEpoch++;
+        // 생성 중에 걸어둔 블러가 이전 이미지에 그대로 남지 않게 푼다.
+        if (focused) resultImage.querySelectorAll("img").forEach((im) => (im.style.filter = "none"));
+        if (status.status === "error") throw new Error(status.error || "생성 실패");
         if (showFinal) resultStatus.textContent = `중지됨 · ${completed} / ${total} 생성됨`;
         return;
-      }
-      if (status.status === "error") {
-        previewEpoch++;
-        throw new Error(status.error || "생성 실패");
       }
     }
     throw new Error("생성 시간이 초과되었습니다.");
