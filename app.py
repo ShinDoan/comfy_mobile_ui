@@ -1679,7 +1679,11 @@ def build_upscale_prompt(uploaded_filename, model_name):
 
 def run_upscale_job(job_id, source_item, model_name):
     with generation_jobs_lock:
-        generation_jobs.setdefault(job_id, {}).update({
+        job = generation_jobs.setdefault(job_id, {})
+        if job.get("stop_requested"):  # 시작도 전에 대기열에서 취소된 경우
+            job["status"] = "stopped"
+            return
+        job.update({
             "status": "running", "total": 1, "completed": 0,
             "overall": 0, "step": 0, "images": [], "stop_requested": False,
         })
@@ -1690,6 +1694,10 @@ def run_upscale_job(job_id, source_item, model_name):
 
         uploaded_name = upload_image_to_comfyui(src_bytes, source_item.get("filename", "upscale_src.png"))
         prompt = build_upscale_prompt(uploaded_name, model_name)
+        with generation_jobs_lock:
+            if generation_jobs[job_id].get("stop_requested"):  # 원본을 올리는 사이에 취소된 경우
+                generation_jobs[job_id]["status"] = "stopped"
+                return
         img_bytes, image_info, _outputs = run_prompt_and_fetch_image(job_id, prompt)
         clear_view_prefetch(job_id)
 
@@ -1704,9 +1712,11 @@ def run_upscale_job(job_id, source_item, model_name):
             generation_jobs[job_id]["completed"] = 1
             generation_jobs[job_id]["status"] = "completed"
     except Exception as e:
+        clear_view_prefetch(job_id)
         with generation_jobs_lock:
             job = generation_jobs[job_id]
             if job.get("stop_requested"):
+                print(f"[INFO] 업스케일 작업 {job_id} 사용자가 중단함")
                 job["status"] = "stopped"
             else:
                 print(f"[ERROR] 업스케일 작업 {job_id}: {e}")

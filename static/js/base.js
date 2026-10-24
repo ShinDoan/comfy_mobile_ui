@@ -3486,6 +3486,7 @@ function initUpscaleControls() {
     setGenerationProgress(0, 0);
     resultStatus.textContent = "업스케일 중 · 브라우저를 닫아도 서버에서 계속 진행됩니다";
 
+    let jobId = null;
     try {
       const res = await fetch("/api/upscale", {
         method: "POST",
@@ -3494,28 +3495,39 @@ function initUpscaleControls() {
       });
       const data = await res.json();
       if (!res.ok || data.error || !data.job_id) throw new Error(data.error || "업스케일 요청 실패");
-      externallyWatchedJobs.add(data.job_id);
+      jobId = data.job_id;
+      externallyWatchedJobs.add(jobId);
       refreshQueueSoon();
 
-      for (let i = 0; i < 900; i++) {
+      // 진행도 바는 생성 작업과 같이 쓰므로, 생성 작업을 지켜보는 중이면 그쪽에 맡긴다.
+      // (예전에는 중지된 업스케일을 끝으로 보지 않아 12분 동안 계속 묻고, 다음 생성의 진행도를 덮어썼다)
+      const ownsProgress = () => !queueHooks.hasMyJobs();
+      let finished = false;
+      for (let i = 0; i < 900 && !finished; i++) {
         await new Promise((resolve) => setTimeout(resolve, 800));
-        const statusRes = await fetch(`/api/generate/${encodeURIComponent(data.job_id)}`);
+        const statusRes = await fetch(`/api/generate/${encodeURIComponent(jobId)}`);
+        if (statusRes.status === 404) throw new Error("작업 기록을 찾을 수 없습니다 (서버 재시작)");
         if (!statusRes.ok) continue;
         const status = await statusRes.json();
-        setGenerationProgress(status.overall != null ? status.overall : 0, status.step);
+        if (ownsProgress()) setGenerationProgress(status.overall != null ? status.overall : 0, status.step);
 
         if (status.status === "completed") {
-          hideProgress();
+          finished = true;
           resultStatus.textContent = "업스케일 완료";
           await loadGeneratedImages();
-          break;
+        } else if (status.status === "stopped") {
+          finished = true;
+          resultStatus.textContent = "업스케일 중지됨";
+        } else if (status.status === "error") {
+          throw new Error(status.error || "업스케일 실패");
         }
-        if (status.status === "error") throw new Error(status.error || "업스케일 실패");
       }
+      if (!finished) throw new Error("업스케일 시간이 초과되었습니다.");
     } catch (err) {
-      hideProgress();
       resultStatus.textContent = "오류: " + err.message;
     } finally {
+      if (!queueHooks.hasMyJobs()) hideProgress();
+      if (jobId) externallyWatchedJobs.delete(jobId);
       upscaleBtn.disabled = !upscaleModels.length;
       settingsBtn.disabled = false;
       upscaleBtn.innerHTML = prevText;
