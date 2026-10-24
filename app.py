@@ -12,11 +12,12 @@ except ImportError:
 app = Flask(__name__)
 
 # ----- 로그 정리 -----
-# 진행도 폴링(0.8초마다 GET /api/generate/<id>), 이미지/정적 파일 요청은 접속 로그에서 제외한다.
+# 진행도 폴링(0.5초마다 GET /api/generate/<id>), 대기열 폴링(1~5초마다 GET /api/queue),
+# 이미지/정적 파일 요청은 접속 로그에서 제외한다.
 # 오류(4xx/5xx)는 그대로 남긴다. 전부 보고 싶으면 환경변수 MOBILE_UI_VERBOSE=1 로 실행.
 import logging, re as _re
 VERBOSE = os.environ.get("MOBILE_UI_VERBOSE") == "1"
-_QUIET_REQUEST = _re.compile(r'"GET (/api/generate/|/generated-images/|/generated-thumbs/|/static/|/api/state|/api/generated-images)[^"]*" [23]\d\d')
+_QUIET_REQUEST = _re.compile(r'"GET (/api/generate/|/api/queue|/generated-images/|/generated-thumbs/|/static/|/api/state|/api/generated-images)[^"]*" [23]\d\d')
 
 _QUIET_STALE_JOB = _re.compile(r'GET /api/generate/[^"]*\S* HTTP[^"]*" 404')
 
@@ -1416,6 +1417,56 @@ def fetch_view_bytes(image_info, retries=5):
     raise ComfyError(f"ComfyUI 에서 이미지를 가져오지 못했습니다 ({image_info.get('filename')}): {last_err}")
 
 
+class ViewPrefetch:
+    """ComfyUI 이미지(/view)를 백그라운드에서 미리 받아둔다."""
+
+    def __init__(self, info):
+        self.info = info
+        self.data = None
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        try:
+            self.data = fetch_view_bytes(self.info)
+        except Exception as e:
+            print(f"[WARN] 이미지 미리 받기 실패, 완료 후 다시 받습니다: {e}")
+
+
+# job_id -> {파일명: ViewPrefetch}
+# SaveImage 결과가 나오는 즉시(executed 이벤트) 이미지를 받아둔다. ComfyUI 는 작업이 끝나자마자 다음 작업을
+# 시작하는데, 그때 모델 로딩 등으로 한동안 /view 응답이 멈추는 경우가 있어서 (hires 이전 이미지를 받는 데
+# 30초 제한 2번 초과 = 61초가 걸린 사례), 끝난 뒤에 받으면 그만큼 완료 표시가 늦어진다.
+_view_prefetch = {}
+_view_prefetch_lock = threading.Lock()
+
+
+def start_view_prefetch(job_id, infos):
+    with _view_prefetch_lock:
+        per_job = _view_prefetch.setdefault(job_id, {})
+        for info in infos:
+            if info.get("type", "output") == "output" and info["filename"] not in per_job:
+                per_job[info["filename"]] = ViewPrefetch(info)
+        while len(_view_prefetch) > 8:  # 오래된 작업 것은 버린다
+            _view_prefetch.pop(next(iter(_view_prefetch)))
+
+
+def clear_view_prefetch(job_id):
+    with _view_prefetch_lock:
+        _view_prefetch.pop(job_id, None)
+
+
+def get_view_bytes(job_id, info):
+    """미리 받아둔 이미지가 있으면 그것을(아직 받는 중이면 끝날 때까지 기다려서), 없으면 지금 받는다."""
+    with _view_prefetch_lock:
+        pf = (_view_prefetch.get(job_id) or {}).get(info.get("filename"))
+    if pf is not None:
+        pf.thread.join()
+        if pf.data:
+            return pf.data
+    return fetch_view_bytes(info)
+
+
 def collect_image_infos(node_output):
     """한 노드의 출력(dict)에서 이미지 항목 목록을 뽑는다.
     ComfyUI 버전에 따라 항목에 id/metadata 같은 필드가 더 붙을 수 있으므로,
@@ -1450,7 +1501,7 @@ def pick_image_info(outputs, final_node=None):
     return all_infos[0] if all_infos else None
 
 
-def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
+def run_prompt_and_fetch_image(job_id, prompt, final_node=None, timing=None):
     """워크플로우(prompt)를 ComfyUI에 제출하고, 진행 상황을 job_id에 기록하며,
     완료되면 결과 이미지 바이트, image_info, 그리고 노드별 전체 출력(outputs)을 반환한다.
     (텍스트→이미지, 업스케일 공용) final_node 를 지정하면 그 노드의 출력을 우선 사용한다
@@ -1461,6 +1512,8 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
     ※ 웹소켓을 /prompt 제출 '이전'에 먼저 연결한다. 제출 후에 연결하면, 이미 캐시된 결과처럼
       아주 빨리 끝나는 작업의 완료 이벤트를 놓쳐서 한참 멈춰 있게 된다."""
     total_nodes = len(prompt)
+    if timing is None:
+        timing = {}
     client_id = uuid.uuid4().hex
     # prompt_id 를 제출 전에 미리 정해서 함께 보낸다 (ComfyUI 가 지원). 그래야 대기열 화면이
     # 제출 직후부터 이 작업을 "이 앱의 작업"으로 알아보고, 응답이 늦거나 끊겨도 작업을 다시 찾을 수 있다.
@@ -1471,6 +1524,7 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
             if job_id in generation_jobs:
                 generation_jobs[job_id]["prompt_id"] = pid
 
+    clear_view_prefetch(job_id)  # 배치의 이전 이미지 것은 더 쓰지 않는다
     with generation_jobs_lock:
         if job_id in generation_jobs:
             job = generation_jobs[job_id]
@@ -1509,7 +1563,8 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
             set_prompt_id(prompt_id)
 
         ws_outputs = {}
-        wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview=bool(HIRES_NODE_IDS & set(prompt)))
+        wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs,
+                        want_preview=bool(HIRES_NODE_IDS & set(prompt)), timing=timing)
     finally:
         if ws is not None:
             try:
@@ -1517,14 +1572,18 @@ def run_prompt_and_fetch_image(job_id, prompt, final_node=None):
             except Exception:
                 pass
 
+    timing["detected"] = time.time()
     save_nodes = [nid for nid, node in prompt.items() if node.get("class_type") == "SaveImage"]
     outputs = fetch_history_outputs(prompt_id, ws_outputs, required_nodes=save_nodes)
+    timing["outputs_from"] = "ws" if outputs is ws_outputs else "history"
+    timing["outputs"] = time.time()
     image_info = pick_image_info(outputs, final_node)
     if not image_info:
         raise ComfyError("ComfyUI 실행은 끝났지만 결과 이미지 정보를 찾지 못했습니다. "
                          f"(history outputs: {json.dumps(outputs, ensure_ascii=False)[:500]})")
 
-    img_bytes = fetch_view_bytes(image_info)
+    img_bytes = get_view_bytes(job_id, image_info)
+    timing["view"] = time.time()
     return img_bytes, image_info, outputs
 
 
@@ -1535,17 +1594,43 @@ def generate_one_image(job_id, data):
     hires 를 사용한 경우, hires 적용 전(base 단계) 이미지도 함께 받아와 같이 저장해서
     나중에 두 버전을 전환해서 볼 수 있게 한다."""
     prompt, final_node = build_prompt(data)
-    img_bytes, image_info, outputs = run_prompt_and_fetch_image(job_id, prompt, final_node)
+    timing = {}
+    img_bytes, image_info, outputs = run_prompt_and_fetch_image(job_id, prompt, final_node, timing=timing)
 
     pre_hires_bytes = None
     hires_enabled = bool((data.get("hires") or {}).get("enabled"))
     if hires_enabled and "17" in outputs and outputs["17"].get("images"):
         try:
-            pre_hires_bytes = fetch_view_bytes(outputs["17"]["images"][0])
+            pre_hires_bytes = get_view_bytes(job_id, outputs["17"]["images"][0])
         except Exception as e:
             print(f"[WARN] hires 이전 이미지 조회 실패: {e}")
+    timing["pre_hires"] = time.time()
 
-    return save_generated_image(img_bytes, image_info, data, pre_hires_bytes=pre_hires_bytes)
+    clear_view_prefetch(job_id)
+    item = save_generated_image(img_bytes, image_info, data, pre_hires_bytes=pre_hires_bytes)
+    log_completion_timing(timing, time.time())
+    return item
+
+
+def log_completion_timing(t, saved):
+    """ComfyUI 가 작업을 끝낸 뒤 화면에 결과가 넘어가기까지 단계별로 걸린 시간을 한 줄로 출력한다.
+    (완료 후 이미지가 늦게 뜰 때 어느 단계가 원인인지 확인하기 위한 로그)"""
+    done = t.get("comfy_done")  # ComfyUI 가 보낸 완료 시각 (웹소켓으로 받았을 때만 있음)
+    parts = []
+    if t.get("sampling_done"):
+        # 마지막 샘플링이 100% 가 된 뒤 ComfyUI 가 VAE 디코딩·PNG 저장을 마치기까지 (화면은 이미 거의 다 찬 상태)
+        parts.append(f"샘플링 100% → ComfyUI 완료 {t['detected'] - t['sampling_done']:.1f}s")
+    if done:
+        parts.append(f"완료 감지 {t['detected'] - done:.1f}s")
+    parts += [
+        f"감지 방법 {t.get('detected_by', '?')}",
+        f"결과 조회 {t['outputs'] - t['detected']:.1f}s({t.get('outputs_from')})",
+        f"이미지 받기 {t['view'] - t['outputs']:.1f}s",
+        f"hires 이전 이미지 {t['pre_hires'] - t['view']:.1f}s",
+        f"저장 {saved - t['pre_hires']:.1f}s",
+        f"합계 {saved - (done or t['detected']):.1f}s",
+    ]
+    print("[TIMING] 생성 완료 → 저장: " + " · ".join(parts))
 
 
 def interrupt_comfyui(prompt_id=None):
@@ -1606,6 +1691,7 @@ def run_upscale_job(job_id, source_item, model_name):
         uploaded_name = upload_image_to_comfyui(src_bytes, source_item.get("filename", "upscale_src.png"))
         prompt = build_upscale_prompt(uploaded_name, model_name)
         img_bytes, image_info, _outputs = run_prompt_and_fetch_image(job_id, prompt)
+        clear_view_prefetch(job_id)
 
         # 업스케일 이전 이미지의 생성 설정을 그대로 물려받는다 (재사용 시 원본 설정이 나오도록).
         settings = dict(source_item.get("settings") or {})
@@ -1767,11 +1853,13 @@ def fetch_history_outputs(prompt_id, ws_outputs=None, required_nodes=()):
     return (entry or {}).get("outputs") or {}
 
 
-def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview=False):
+def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview=False, timing=None):
     """prompt_id 작업이 끝날 때까지 기다리며 진행도를 job 에 기록한다.
     - 웹소켓 이벤트(executing/progress/executed/execution_success/error)로 실시간 진행을 추적하고,
     - 웹소켓이 없거나 완료 이벤트를 놓쳐도 3초마다 /history 를 확인해서 반드시 빠져나온다.
     오류/중단 이벤트가 오면 ComfyError 를 던진다."""
+    if timing is None:
+        timing = {}
     nodes_started = 0
     deadline = time.time() + MAX_WAIT_SECONDS
     last_history_check = 0.0
@@ -1817,6 +1905,8 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
             if etype == "progress" and mine:
                 value, max_value = edata.get("value", 0), edata.get("max", 0)
                 step_pct = round(100 * value / max_value) if max_value else 0
+                if max_value and value >= max_value:
+                    timing["sampling_done"] = time.time()
                 set_job(step=step_pct)
 
             elif etype == "execution_cached" and pid == prompt_id:
@@ -1826,6 +1916,7 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
                 node, output = edata.get("node"), edata.get("output")
                 if node is not None and output:
                     ws_outputs[str(node)] = output
+                    start_view_prefetch(job_id, collect_image_infos(output))
                 if want_preview and str(node) == BASE_PREVIEW_NODE_ID:
                     infos = collect_image_infos(output)
                     if infos:
@@ -1833,6 +1924,7 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
 
             elif etype == "executing":
                 if edata.get("node") is None and pid == prompt_id:
+                    timing["detected_by"] = "ws(executing)"
                     set_job(overall=100, step=100)
                     return
                 if pid == prompt_id:
@@ -1844,6 +1936,9 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
                     set_job(**kv)
 
             elif etype == "execution_success" and pid == prompt_id:
+                timing["detected_by"] = "ws(execution_success)"
+                if edata.get("timestamp"):
+                    timing["comfy_done"] = edata["timestamp"] / 1000
                 set_job(overall=100, step=100)
                 return
 
@@ -1862,6 +1957,8 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
         if now - last_history_check >= (5 if ws is not None else 3):
             last_history_check = now
             ids = comfy_queue_prompt_ids()
+            if time.time() - now > 2:
+                print(f"[TIMING] ComfyUI 대기열 확인이 {time.time() - now:.1f}초 걸렸습니다 (그동안 진행 이벤트를 읽지 못함)")
             in_queue = ids is not None and (prompt_id in ids[0] or prompt_id in ids[1])
             if not in_queue:
                 entry = get_history_entry(prompt_id)
@@ -1869,6 +1966,7 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
                     err = history_error_message(entry)
                     if err:
                         raise ComfyError(err)
+                    timing["detected_by"] = "history 확인(웹소켓 " + ("연결됨" if ws is not None else "없음") + ")"
                     set_job(overall=100, step=100)
                     return
                 if ids is not None:
@@ -1954,7 +2052,7 @@ def api_generate_preview(job_id):
         body, mimetype = cached[1], cached[2]
     else:
         try:
-            body, mimetype = shrink_preview(fetch_view_bytes(info))
+            body, mimetype = shrink_preview(get_view_bytes(job_id, info))
         except Exception as e:
             return jsonify({"error": f"미리보기를 가져오지 못했습니다: {e}"}), 502
         with _preview_cache_lock:

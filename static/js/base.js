@@ -3413,12 +3413,9 @@ function setGenerationProgress(overallPct, stepPct) {
 // 진행도 UI(바 + 미리보기 위 퍼센트)를 한꺼번에 보이거나 숨긴다.
 // PC 레이아웃의 진행도 바 위 "단계" 라벨. (모바일에서는 CSS로 숨겨져 있다)
 // 진행 링 가운데의 단계 이름도 같이 바꾼다.
+// 단계는 서버가 알려준 실행 중인 작업의 상태로만 정한다. (생성 중에 Hires 체크박스를 바꿔도 영향 없음)
 function setProgressStageLabel(stage, override) {
-  let text = override;
-  if (!text) {
-    const hiresOn = document.getElementById("hiresEnabled").checked;
-    text = hiresOn ? (stage === "hires" ? "Hires 2 / 2 단계" : "Hires 1 / 2 단계") : "기본 생성";
-  }
+  const text = override || (stage === "hires" ? "Hires" : "기본 생성");
   ["progressStageLabel", "progressRingStage"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.textContent = text;
@@ -3631,9 +3628,7 @@ function queueSourceTag(item) {
 
 function queueStageLabel(item) {
   if (item.kind === "upscale") return "업스케일";
-  const summary = item.summary || {};
-  if (!summary.hires) return "기본 생성";
-  return item.progress && item.progress.stage === "hires" ? "Hires 2 / 2 단계" : "Hires 1 / 2 단계";
+  return item.progress && item.progress.stage === "hires" ? "Hires" : "기본 생성";
 }
 
 function queueMetaParts(item) {
@@ -3982,7 +3977,25 @@ function initGenerate(seedApi) {
   // 생성 중 블러 연출 (진행 링 뒤): 일반 생성 중에는 화면에 남은 이전 이미지가 점점 흐려지고,
   // hires 사용 시에는 base 단계 이미지가 흐린 상태로 나타났다가 hires 진행도에 따라 선명해진다.
   const resultBlurEffectEnabled = true;
-  const MAX_RESULT_BLUR = 16;
+  const MAX_RESULT_BLUR = 6.4; // 예전 최대치(16px)의 40%
+
+  // 진행률(0~100)을 10% 단위로 내린다. 블러는 이 단계가 바뀔 때만 다시 계산되어,
+  // 0.5초마다 오는 진행도마다 큰 이미지를 다시 흐리게 그리지 않는다.
+  const blurLevel = (pct) => Math.max(0, Math.min(10, Math.floor((pct || 0) / 10)));
+
+  // 이미지에 블러를 건다. 값이 그대로면 아무것도 하지 않는다 (같은 값을 다시 넣어도 다시 그리는 브라우저가 있다).
+  // 블러가 걸린 동안은 이미지를 별도 레이어로 올려서, 블러 세기가 바뀔 때 테두리·픽셀 위치가
+  // 흔들려 보이는 것(떨림)을 막는다.
+  function setResultBlur(img, px, transition) {
+    const value = px > 0 ? `blur(${px.toFixed(1)}px)` : "none";
+    if (img.dataset.blur === value) return;
+    img.dataset.blur = value;
+    if (transition) img.style.transition = transition;
+    img.style.willChange = px > 0 ? "filter" : "";
+    img.style.transform = px > 0 ? "translateZ(0)" : "";
+    img.style.backfaceVisibility = px > 0 ? "hidden" : "";
+    img.style.filter = value;
+  }
 
   // ComfyUI 에서 지금 실행 중인 내 작업이 있으면 그것을, 없으면 지금 보던 작업(또는 가장 먼저 넣은 작업)을 그린다.
   function chooseFocus() {
@@ -4105,7 +4118,7 @@ function initGenerate(seedApi) {
             previewImg.src = probe.src;
             // 미리보기가 조금 늦게 도착해도 블러가 갑자기 바뀌지 않고 현재 hires 진행도까지 부드럽게 풀리도록 조금 길게
             previewImg.style.transition = "filter 0.6s ease-out";
-            if (resultBlurEffectEnabled) previewImg.style.filter = `blur(${MAX_RESULT_BLUR}px)`;
+            if (resultBlurEffectEnabled) setResultBlur(previewImg, MAX_RESULT_BLUR);
             resultImage.appendChild(previewImg);
             previewShown = true;
             maxStepSeen = 0;
@@ -4122,19 +4135,20 @@ function initGenerate(seedApi) {
         const previewImg = document.getElementById("hiresPreviewImg");
         if (previewImg) {
           if (!resultBlurEffectEnabled) {
-            previewImg.style.filter = "none";
+            setResultBlur(previewImg, 0);
           } else {
             // base 이미지는 처음부터 최대로 흐린 상태로 보여주고(예전에는 hires 진행률 5% 전까지 잠깐
             // 선명하게 보였다가 확 흐려졌다), hires 진행률의 최고값을 따라 점점 선명해진다.
             // 최고값만 쓰므로 노드가 바뀌어 step 이 0 으로 돌아가도 다시 흐려지지 않는다.
+            // 10% 단위로만 풀린다 (0~9% → 최대 블러, 10~19% → 90%, …).
             if (status.stage === "hires") maxStepSeen = Math.max(maxStepSeen, status.step != null ? status.step : 0);
-            previewImg.style.filter = `blur(${(MAX_RESULT_BLUR * (1 - maxStepSeen / 100)).toFixed(1)}px)`;
+            setResultBlur(previewImg, MAX_RESULT_BLUR * (1 - blurLevel(maxStepSeen) / 10));
           }
         }
       } else if (focused && resultBlurEffectEnabled && !finished) {
         // hires 가 아닌 일반 생성 중에는, 아직 화면에 남아있는 이전 이미지 위에
         // 진행률이 올라갈수록 블러를 점점 강하게 걸어서 "새 이미지가 만들어지고
-        // 있다"는 느낌을 준다. 최종 블러 강도는 hires 시작 블러와 동일한 16px.
+        // 있다"는 느낌을 준다. 최종 블러 강도는 hires 시작 블러와 동일한 MAX_RESULT_BLUR.
         // step은 노드가 바뀔 때마다 0으로 리셋되는데, 그대로 쓰면 화면에 남아있는
         // 이전 이미지의 블러가 중간에 풀렸다가 완성 직전에 다시 들어가는 것처럼
         // 보인다. 그래서 지금까지 본 것 중 가장 높은 값만 추적해서 절대 줄어들지
@@ -4144,8 +4158,7 @@ function initGenerate(seedApi) {
           // hires 단계로 넘어갔으면 base 생성은 끝난 것이므로 최대로 흐리게 (base 미리보기가 같은 세기에서 이어받는다)
           const stepPct = status.stage === "hires" ? 100 : status.step != null ? status.step : 0;
           maxStepSeen = Math.max(maxStepSeen, stepPct);
-          oldImg.style.transition = "filter 0.2s linear";
-          oldImg.style.filter = `blur(${Math.min(MAX_RESULT_BLUR, (maxStepSeen / 100) * MAX_RESULT_BLUR)}px)`;
+          setResultBlur(oldImg, (blurLevel(maxStepSeen) / 10) * MAX_RESULT_BLUR, "filter 0.4s ease-out");
         }
       }
 
@@ -4157,7 +4170,7 @@ function initGenerate(seedApi) {
       if (status.status === "stopped" || status.status === "error") {
         previewEpoch++;
         // 생성 중에 걸어둔 블러가 이전 이미지에 그대로 남지 않게 푼다.
-        if (focused) resultImage.querySelectorAll("img").forEach((im) => (im.style.filter = "none"));
+        if (focused) resultImage.querySelectorAll("img").forEach((im) => setResultBlur(im, 0));
         if (status.status === "error") throw new Error(status.error || "생성 실패");
         if (showFinal) resultStatus.textContent = `중지됨 · ${completed} / ${total} 생성됨`;
         return;
