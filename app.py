@@ -16,7 +16,7 @@ app = Flask(__name__)
 # 오류(4xx/5xx)는 그대로 남긴다. 전부 보고 싶으면 환경변수 MOBILE_UI_VERBOSE=1 로 실행.
 import logging, re as _re
 VERBOSE = os.environ.get("MOBILE_UI_VERBOSE") == "1"
-_QUIET_REQUEST = _re.compile(r'"GET (/api/generate/|/generated-images/|/generated-thumbs/|/generated-display/|/static/|/api/state|/api/generated-images)[^"]*" [23]\d\d')
+_QUIET_REQUEST = _re.compile(r'"GET (/api/generate/|/generated-images/|/generated-thumbs/|/static/|/api/state|/api/generated-images)[^"]*" [23]\d\d')
 
 _QUIET_STALE_JOB = _re.compile(r'GET /api/generate/[^"]*\S* HTTP[^"]*" 404')
 
@@ -37,8 +37,6 @@ IMAGE_DIR = os.path.join(DATA_DIR, "generated_images")
 IMAGE_INDEX_FILE = os.path.join(IMAGE_DIR, "index.json")
 THUMB_DIR = os.path.join(IMAGE_DIR, "thumbs")
 THUMB_MAX_SIDE = 384  # 이전 생성 이미지 목록 / 큰 이미지가 뜨기 전 자리표시용 (화면 2배 해상도 기준)
-DISPLAY_MAX_SIDE = 2048  # 큰 이미지 보기용 JPEG (원본 PNG 는 hires 시 6~10MB 라 휴대폰에서 받는 데 몇 초씩 걸린다)
-DISPLAY_QUALITY = 88
 TAGS_FILE = os.path.join(DATA_DIR, "tags.json")
 COOKIE_MAX_AGE = 60 * 60 * 24 * 400
 FIXED = {
@@ -1052,7 +1050,7 @@ def save_generated_image(img_bytes, image_info, data, pre_hires_bytes=None):
     with open(os.path.join(IMAGE_DIR, filename), "wb") as f:
         f.write(img_bytes)
     # 썸네일은 완료 표시를 늦추지 않도록 따로 만든다 (먼저 요청이 오면 그때 만들어진다).
-    threading.Thread(target=make_derivatives, args=(filename, img_bytes), daemon=True).start()
+    threading.Thread(target=make_thumbnail, args=(filename, img_bytes), daemon=True).start()
 
     pre_hires_filename = ""
     if pre_hires_bytes:
@@ -1096,60 +1094,27 @@ def thumb_filename(filename):
     return os.path.splitext(filename)[0] + ".jpg"
 
 
-def display_filename(filename):
-    return os.path.splitext(filename)[0] + "_display.jpg"
-
-
-_derivative_locks = {}
-_derivative_locks_guard = threading.Lock()
-
-
-def make_derivatives(filename, img_bytes=None):
-    """생성 이미지에서 목록용 썸네일과 큰 화면용 JPEG 를 한 번의 디코딩으로 만든다 (이미 있으면 그대로). 성공하면 True.
-    원본 PNG 는 수 MB 라서 목록·큰 화면에 그대로 띄우면 휴대폰에서 아주 늦게 뜬다.
-    저장 직후 백그라운드에서 만들기 시작하고, 그 사이에 요청이 오면 새로 만들지 않고 끝나기를 기다린다."""
+def make_thumbnail(filename, img_bytes=None):
+    """생성 이미지의 작은 JPEG 썸네일을 만든다 (이미 있으면 그대로). 성공하면 True.
+    원본 PNG 는 수 MB 라서, 목록에 20장씩 원본을 띄우면 휴대폰에서 목록이 아주 늦게 채워진다."""
     if PILImage is None or not filename:
         return False
-    thumb = os.path.join(THUMB_DIR, thumb_filename(filename))
-    display = os.path.join(THUMB_DIR, display_filename(filename))
-    with _derivative_locks_guard:
-        lock = _derivative_locks.setdefault(filename, threading.Lock())
-    with lock:
-        if os.path.isfile(thumb) and os.path.isfile(display):
-            return True
-        try:
-            os.makedirs(THUMB_DIR, exist_ok=True)
-            src = io.BytesIO(img_bytes) if img_bytes is not None else os.path.join(IMAGE_DIR, filename)
-            with PILImage.open(src) as im:
-                im = im.convert("RGB")
-                for dst, side, quality in ((display, DISPLAY_MAX_SIDE, DISPLAY_QUALITY), (thumb, THUMB_MAX_SIDE, 82)):
-                    if os.path.isfile(dst):
-                        continue
-                    out = im.copy()
-                    out.thumbnail((side, side))
-                    tmp = f"{dst}.{uuid.uuid4().hex[:6]}.tmp"
-                    out.save(tmp, "JPEG", quality=quality)
-                    os.replace(tmp, dst)
-            return True
-        except Exception as e:
-            print(f"[WARN] 썸네일 생성 실패 ({filename}): {e}")
-            return False
-        finally:
-            with _derivative_locks_guard:
-                _derivative_locks.pop(filename, None)
-
-
-def with_derived_urls(item):
-    """이미지 항목에 썸네일/큰 화면용 주소를 붙인다 (원본 url 은 다운로드용으로 그대로 둔다)."""
-    filename = item.get("filename", "")
-    if not filename:
-        return item
-    item = dict(item)
-    quoted = urllib.parse.quote(filename)
-    item["url"] = f"/generated-images/{quoted}"
-    item["thumb_url"] = f"/generated-thumbs/{quoted}"
-    item["display_url"] = f"/generated-display/{quoted}"
-    return item
+    dst = os.path.join(THUMB_DIR, thumb_filename(filename))
+    if os.path.isfile(dst):
+        return True
+    try:
+        os.makedirs(THUMB_DIR, exist_ok=True)
+        src = io.BytesIO(img_bytes) if img_bytes is not None else os.path.join(IMAGE_DIR, filename)
+        with PILImage.open(src) as im:
+            im = im.convert("RGB")
+            im.thumbnail((THUMB_MAX_SIDE, THUMB_MAX_SIDE))
+            tmp = f"{dst}.{uuid.uuid4().hex[:6]}.tmp"
+            im.save(tmp, "JPEG", quality=82, optimize=True)
+        os.replace(tmp, dst)
+        return True
+    except Exception as e:
+        print(f"[WARN] 썸네일 생성 실패 ({filename}): {e}")
+        return False
 
 
 def remove_item_files(item):
@@ -1157,8 +1122,7 @@ def remove_item_files(item):
         fname = item.get(fname_key)
         if not fname:
             continue
-        for path in (os.path.join(IMAGE_DIR, fname), os.path.join(THUMB_DIR, thumb_filename(fname)),
-                     os.path.join(THUMB_DIR, display_filename(fname))):
+        for path in (os.path.join(IMAGE_DIR, fname), os.path.join(THUMB_DIR, thumb_filename(fname))):
             if os.path.isfile(path):
                 try:
                     os.remove(path)
@@ -1207,7 +1171,10 @@ def api_generated_images():
             continue
         filename = item.get("filename", "")
         if filename and os.path.isfile(os.path.join(IMAGE_DIR, filename)):
-            items.append(with_derived_urls(item))
+            item = dict(item)
+            item["url"] = f"/generated-images/{urllib.parse.quote(filename)}"
+            item["thumb_url"] = f"/generated-thumbs/{urllib.parse.quote(filename)}"
+            items.append(item)
     return jsonify(items)
 
 @app.route("/generated-images/<path:filename>")
@@ -1215,24 +1182,15 @@ def generated_image(filename):
     return immutable(send_from_directory(IMAGE_DIR, filename))
 
 
-def send_derivative(filename, name_fn):
-    """원본 파일명으로 썸네일/큰 화면용 JPEG 를 돌려준다. 예전에 생성된 이미지는 처음 요청될 때 만든다.
-    만들 수 없으면(Pillow 없음 등) 원본을 그대로 보낸다."""
-    if os.path.basename(filename) != filename or not os.path.isfile(os.path.join(IMAGE_DIR, filename)):
-        return jsonify({"error": "not found"}), 404
-    if make_derivatives(filename):
-        return immutable(send_from_directory(THUMB_DIR, name_fn(filename)))
-    return immutable(send_from_directory(IMAGE_DIR, filename))
-
-
 @app.route("/generated-thumbs/<path:filename>")
 def generated_thumb(filename):
-    return send_derivative(filename, thumb_filename)
-
-
-@app.route("/generated-display/<path:filename>")
-def generated_display(filename):
-    return send_derivative(filename, display_filename)
+    """원본 파일명으로 썸네일을 돌려준다. 예전에 생성된 이미지는 처음 요청될 때 만든다.
+    썸네일을 만들 수 없으면(Pillow 없음 등) 원본을 그대로 보낸다."""
+    if os.path.basename(filename) != filename or not os.path.isfile(os.path.join(IMAGE_DIR, filename)):
+        return jsonify({"error": "not found"}), 404
+    if make_thumbnail(filename):
+        return immutable(send_from_directory(THUMB_DIR, thumb_filename(filename)))
+    return immutable(send_from_directory(IMAGE_DIR, filename))
 
 
 def immutable(resp):
@@ -1955,8 +1913,6 @@ def api_generate_status(job_id):
     if not job:
         return jsonify({"status": "not_found"}), 404
     result = dict(job)
-    # 완성된 이미지를 목록을 다시 받지 않고도 바로 띄울 수 있게 표시용 주소를 붙여 보낸다.
-    result["images"] = [with_derived_urls(it) for it in result.get("images") or []]
     if result.get("preview_image"):
         # prompt_id 를 붙여 이미지마다 주소가 달라지게 한다 (같은 주소면 Safari 가 이전 그림을 재사용함)
         result["preview_url"] = (f"/api/generate/{urllib.parse.quote(job_id)}/preview"

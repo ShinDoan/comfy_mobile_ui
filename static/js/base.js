@@ -3186,9 +3186,7 @@ function renderCurrentImage(item, animate) {
     resultImage.style.aspectRatio = `${item.settings.width} / ${item.settings.height}`;
   }
 
-  // 작은 썸네일을 먼저 띄우고, 큰 화면용 JPEG 를 다 받으면 바꿔 끼운다.
-  // (원본 PNG 는 hires 시 6~10MB 라 휴대폰에서 한참 걸린다. 원본은 다운로드 버튼으로 받는다)
-  const fullUrl = item.display_url || item.url;
+  // 작은 썸네일을 먼저 띄우고, 원본 PNG 를 다 받으면 바꿔 끼운다 (원본은 수 MB 라 휴대폰에서 한참 걸린다).
   const img = document.createElement("img");
   img.alt = "생성된 이미지";
   img.decoding = "async";
@@ -3196,22 +3194,18 @@ function renderCurrentImage(item, animate) {
     img.src = item.thumb_url;
     const full = new Image();
     full.onload = () => {
-      if (img.isConnected && currentHiresUrl === fullUrl && !viewingPreHires) img.src = full.src;
+      if (img.isConnected && currentHiresUrl === item.url && !viewingPreHires) img.src = full.src;
     };
-    full.src = fullUrl;
+    full.src = item.url;
   } else {
-    img.src = fullUrl;
+    img.src = item.url;
   }
   resultImage.appendChild(img);
   resultStatus.textContent = `생성 완료 · ${item.created_at || ""}`;
 
   currentImageId = item.id || null;
   currentImageSettings = item.settings || null;
-  currentHiresUrl = fullUrl || null;
-  const downloadBtn = document.getElementById("downloadCurrentBtn");
-  downloadBtn.href = item.url || "#";
-  downloadBtn.setAttribute("download", item.filename || "");
-  downloadBtn.style.display = item.url ? "flex" : "none";
+  currentHiresUrl = item.url || null;
   currentPreHiresUrl = item.pre_hires_url || null;
   viewingPreHires = false;
   stopPreHiresAlternation(currentResult);
@@ -3301,7 +3295,6 @@ async function deleteImage(id) {
     currentImageId = null;
     currentImageSettings = null;
     document.getElementById("deleteCurrentBtn").style.display = "none";
-    document.getElementById("downloadCurrentBtn").style.display = "none";
     document.getElementById("reuseSettingsBtn").style.display = "none";
     document.getElementById("upscaleBtn").style.display = "none";
     document.getElementById("upscaleSettingsBtn").style.display = "none";
@@ -3361,7 +3354,6 @@ function renderHistory(items) {
 }
 
 // historyOnly: 지금 크게 보고 있는 이미지(또는 생성 중 미리보기)는 그대로 두고 아래 목록만 갱신한다.
-// keepCurrent: 큰 이미지는 이미 띄웠으니 다시 그리지 않고, 목록 갱신 + 첫 카드 선택 표시만 한다.
 async function loadGeneratedImages(options = {}) {
   try {
     const res = await fetch(`/api/generated-images?family=${encodeURIComponent(currentFam)}`);
@@ -3373,7 +3365,7 @@ async function loadGeneratedImages(options = {}) {
       return;
     }
     if (items.length) {
-      if (!options.keepCurrent) renderCurrentImage(items[0], false);
+      renderCurrentImage(items[0], false);
       const firstCard = document.querySelector("#imageHistory .history-card");
       if (selectedThumbEl && selectedThumbEl !== firstCard && selectedThumbEl.isConnected) {
         setGlowStill(selectedThumbEl, selectedThumbEl.dataset.glowKind);
@@ -3387,7 +3379,6 @@ async function loadGeneratedImages(options = {}) {
       currentImageId = null;
       currentImageSettings = null;
       document.getElementById("deleteCurrentBtn").style.display = "none";
-      document.getElementById("downloadCurrentBtn").style.display = "none";
       document.getElementById("reuseSettingsBtn").style.display = "none";
       document.getElementById("upscaleBtn").style.display = "none";
       document.getElementById("upscaleSettingsBtn").style.display = "none";
@@ -4071,14 +4062,7 @@ function initGenerate(seedApi) {
       if (completed > lastCompleted) {
         lastCompleted = completed;
         previewEpoch++;
-        // 완성된 이미지는 상태 응답에 들어 있으므로 목록을 다시 받기 전에 바로 띄우고, 목록은 그 뒤에 갱신한다.
-        const newest = (status.images || [])[status.images.length - 1];
-        if (focused && newest && newest.family === currentFam) {
-          renderCurrentImage(newest, true);
-          await loadGeneratedImages({ keepCurrent: true });
-        } else {
-          await loadGeneratedImages({ historyOnly: !focused });
-        }
+        await loadGeneratedImages();
         previewShown = false;
         maxStepSeen = 0;
       }
