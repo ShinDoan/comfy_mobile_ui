@@ -4070,8 +4070,10 @@ function initGenerate(seedApi) {
       const finished = status.status === "completed" || status.status === "stopped" || status.status === "error";
       if (focused) {
         // 앞의 작업이 끝나기를 기다리는 중이면 0% 대신 "대기 중 · N번째"를 보여준다.
+        // (다른 작업이 실제로 실행 중일 때만. 막 시작하는 내 작업에 "대기 중"이 잠깐 뜨지 않게)
         const queueIdx = queueState.items.findIndex((it) => it.job_id === jobId);
-        const waiting = queueIdx >= 0 && !queueState.items[queueIdx].running;
+        const waiting = queueIdx >= 0 && !queueState.items[queueIdx].running &&
+          queueState.items.some((it) => it.running && it.job_id !== jobId);
         renderBatchDots(completed, total);
         setGenerationProgress(status.overall != null ? status.overall : 0, status.step);
         setProgressStageLabel(status.stage, waiting ? `대기 중 · ${queueIdx + 1}번째` : status.kind === "upscale" ? "업스케일" : null);
@@ -4101,7 +4103,8 @@ function initGenerate(seedApi) {
             previewImg.id = "hiresPreviewImg";
             previewImg.alt = "생성 중 미리보기";
             previewImg.src = probe.src;
-            previewImg.style.transition = "filter 0.2s linear";
+            // 미리보기가 조금 늦게 도착해도 블러가 갑자기 바뀌지 않고 현재 hires 진행도까지 부드럽게 풀리도록 조금 길게
+            previewImg.style.transition = "filter 0.6s ease-out";
             if (resultBlurEffectEnabled) previewImg.style.filter = `blur(${MAX_RESULT_BLUR}px)`;
             resultImage.appendChild(previewImg);
             previewShown = true;
@@ -4138,7 +4141,8 @@ function initGenerate(seedApi) {
         // 않게 하고, 새 이미지가 진짜로 로드됐을 때만 자연스럽게 사라지게 한다.
         const oldImg = resultImage.querySelector("img");
         if (oldImg) {
-          const stepPct = status.step != null ? status.step : 0;
+          // hires 단계로 넘어갔으면 base 생성은 끝난 것이므로 최대로 흐리게 (base 미리보기가 같은 세기에서 이어받는다)
+          const stepPct = status.stage === "hires" ? 100 : status.step != null ? status.step : 0;
           maxStepSeen = Math.max(maxStepSeen, stepPct);
           oldImg.style.transition = "filter 0.2s linear";
           oldImg.style.filter = `blur(${Math.min(MAX_RESULT_BLUR, (maxStepSeen / 100) * MAX_RESULT_BLUR)}px)`;

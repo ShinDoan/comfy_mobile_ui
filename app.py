@@ -1919,17 +1919,49 @@ def api_generate_status(job_id):
                                  f"?v={urllib.parse.quote(str(result.get('prompt_id', '')))}")
     return jsonify(result)
 
+PREVIEW_MAX_SIDE = 768  # hires 진행 중 흐리게 보여주는 base 이미지라 원본 해상도가 필요 없다
+_preview_cache = {}     # job_id -> (ComfyUI 파일명, 바이트, mimetype)
+_preview_cache_lock = threading.Lock()
+
+
+def shrink_preview(img_bytes):
+    """base 단계 미리보기를 작은 JPEG 로 줄인다. 원본 PNG(수 MB)를 그대로 휴대폰에 보내면
+    hires 가 한참 진행된 뒤에야 미리보기가 떠서, 블러가 서서히 풀리지 않고 갑자기 바뀐다."""
+    if PILImage is None:
+        return img_bytes, "image/png"
+    try:
+        with PILImage.open(io.BytesIO(img_bytes)) as im:
+            im = im.convert("RGB")
+            im.thumbnail((PREVIEW_MAX_SIDE, PREVIEW_MAX_SIDE))
+            out = io.BytesIO()
+            im.save(out, "JPEG", quality=80)
+        return out.getvalue(), "image/jpeg"
+    except Exception as e:
+        print(f"[WARN] 미리보기 축소 실패, 원본을 보냅니다: {e}")
+        return img_bytes, "image/png"
+
+
 @app.route("/api/generate/<job_id>/preview")
 def api_generate_preview(job_id):
     with generation_jobs_lock:
         job = generation_jobs.get(job_id)
-    if not job or not job.get("preview_image"):
+        info = dict(job["preview_image"]) if job and job.get("preview_image") else None
+    if not info:
         return jsonify({"error": "미리보기가 아직 없습니다."}), 404
-    try:
-        img_bytes = fetch_view_bytes(job["preview_image"])
-    except Exception as e:
-        return jsonify({"error": f"미리보기를 가져오지 못했습니다: {e}"}), 502
-    resp = app.response_class(img_bytes, mimetype="image/png")
+    with _preview_cache_lock:
+        cached = _preview_cache.get(job_id)
+    if cached and cached[0] == info.get("filename"):
+        body, mimetype = cached[1], cached[2]
+    else:
+        try:
+            body, mimetype = shrink_preview(fetch_view_bytes(info))
+        except Exception as e:
+            return jsonify({"error": f"미리보기를 가져오지 못했습니다: {e}"}), 502
+        with _preview_cache_lock:
+            _preview_cache[job_id] = (info.get("filename"), body, mimetype)
+            while len(_preview_cache) > 20:  # 오래된 작업의 미리보기는 버린다
+                _preview_cache.pop(next(iter(_preview_cache)))
+    resp = app.response_class(body, mimetype=mimetype)
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
