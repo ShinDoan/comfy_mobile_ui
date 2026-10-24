@@ -3977,7 +3977,7 @@ function initGenerate(seedApi) {
   // 생성 중 블러 연출 (진행 링 뒤): 일반 생성 중에는 화면에 남은 이전 이미지가 점점 흐려지고,
   // hires 사용 시에는 base 단계 이미지가 흐린 상태로 나타났다가 hires 진행도에 따라 선명해진다.
   const resultBlurEffectEnabled = true;
-  const MAX_RESULT_BLUR = 16;
+  const MAX_RESULT_BLUR = 6.4; // 예전 최대치(16px)의 40%
 
   // 진행률(0~100)을 10% 단위로 내린다. 블러는 이 단계가 바뀔 때만 다시 계산되어,
   // 0.5초마다 오는 진행도마다 큰 이미지를 다시 흐리게 그리지 않는다.
@@ -4148,7 +4148,7 @@ function initGenerate(seedApi) {
       } else if (focused && resultBlurEffectEnabled && !finished) {
         // hires 가 아닌 일반 생성 중에는, 아직 화면에 남아있는 이전 이미지 위에
         // 진행률이 올라갈수록 블러를 점점 강하게 걸어서 "새 이미지가 만들어지고
-        // 있다"는 느낌을 준다. 최종 블러 강도는 hires 시작 블러와 동일한 16px.
+        // 있다"는 느낌을 준다. 최종 블러 강도는 hires 시작 블러와 동일한 MAX_RESULT_BLUR.
         // step은 노드가 바뀔 때마다 0으로 리셋되는데, 그대로 쓰면 화면에 남아있는
         // 이전 이미지의 블러가 중간에 풀렸다가 완성 직전에 다시 들어가는 것처럼
         // 보인다. 그래서 지금까지 본 것 중 가장 높은 값만 추적해서 절대 줄어들지
