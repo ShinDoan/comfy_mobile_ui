@@ -1959,6 +1959,10 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
             ids = comfy_queue_prompt_ids()
             if time.time() - now > 2:
                 print(f"[TIMING] ComfyUI 대기열 확인이 {time.time() - now:.1f}초 걸렸습니다 (그동안 진행 이벤트를 읽지 못함)")
+            if ids is None and ws is not None:
+                # 대기열을 모르면 history 까지 묻지 않는다 (웹소켓이 살아 있으니 완료는 이벤트로 알 수 있다).
+                # 바쁜 ComfyUI 에 history 를 물으면 최대 20초 동안 진행 이벤트를 읽지 못한다.
+                continue
             in_queue = ids is not None and (prompt_id in ids[0] or prompt_id in ids[1])
             if not in_queue:
                 entry = get_history_entry(prompt_id)
@@ -2084,17 +2088,60 @@ ACTIVE_JOB_STATUSES = ("queued", "running")
 # 열린 화면 수 × 1초, 작업 수 × 몇 초마다 ComfyUI 에 /queue 를 따로따로 물으면 바쁜 ComfyUI 가
 # 연결을 끊기도 한다. 짧은 시간 동안은 한 번 받아온 결과를 모두가 같이 쓴다.
 QUEUE_CACHE_SECONDS = 1.0
-_queue_cache = {"time": 0.0, "data": None}
-_queue_cache_lock = threading.Lock()
+QUEUE_FAIL_BACKOFF = 3.0   # 조회에 실패하면 이 시간 동안은 다시 묻지 않고 바로 실패로 처리한다
+QUEUE_STALE_SECONDS = 30.0  # 화면용 목록은 조회가 실패/진행 중이어도 이 시간 안의 마지막 결과를 보여준다
+_queue_cache = {"time": 0.0, "data": None, "fail_time": 0.0, "error": None}
+_queue_cache_lock = threading.Lock()   # _queue_cache 읽기/쓰기용 (짧게만 잡는다)
+_queue_fetch_lock = threading.Lock()   # ComfyUI 에 실제로 묻는 요청은 한 번에 하나만
 
 
-def fetch_comfy_queue(max_age=QUEUE_CACHE_SECONDS):
-    with _queue_cache_lock:  # 동시에 여러 요청이 와도 ComfyUI 에는 한 번만 묻는다
-        if _queue_cache["data"] is not None and time.time() - _queue_cache["time"] < max_age:
-            return _queue_cache["data"]
-        data = comfy_request_json(f"{COMFY_URL}/queue", timeout=5)
-        _queue_cache.update(time=time.time(), data=data)
+def fetch_comfy_queue(max_age=QUEUE_CACHE_SECONDS, allow_stale=False):
+    """ComfyUI /queue 결과. 동시에 여러 요청이 와도 ComfyUI 에는 한 번만 묻는다.
+    예전에는 묻는 동안 잠금을 잡고 있어서, ComfyUI 가 바빠 응답이 늦거나(최대 5초) 실패하면
+    화면의 대기열 갱신과 작업별 완료 확인이 모두 그 뒤에 줄을 서서 '5초 × 기다리는 수' 만큼 늦어졌다.
+    - 실패하면 QUEUE_FAIL_BACKOFF 초 동안은 다시 묻지 않고 바로 실패로 처리한다.
+    - allow_stale=True(화면용)면 다른 요청이 묻는 중이거나 실패 직후일 때 기다리지 않고 마지막 결과를 쓴다."""
+    def cached(age_limit):
+        with _queue_cache_lock:
+            data, t = _queue_cache["data"], _queue_cache["time"]
+            failing = time.time() - _queue_cache["fail_time"] < QUEUE_FAIL_BACKOFF
+            error = _queue_cache["error"]
+        return (data if data is not None and time.time() - t < age_limit else None), failing, error
+
+    data, failing, error = cached(max_age)
+    if data is not None:
         return data
+    stale = cached(QUEUE_STALE_SECONDS)[0] if allow_stale else None
+    if failing:
+        if stale is not None:
+            return stale
+        raise ComfyError(f"최근 조회 실패: {error}")
+    if not _queue_fetch_lock.acquire(blocking=stale is None):
+        return stale  # 다른 요청이 지금 묻는 중이면 기다리지 않는다
+    try:
+        data, failing, error = cached(max_age)  # 기다리는 사이 다른 요청이 받아왔으면 그것을 쓴다
+        if data is not None:
+            return data
+        if failing:
+            raise ComfyError(f"최근 조회 실패: {error}")
+        try:
+            data = comfy_request_json(f"{COMFY_URL}/queue", timeout=5)
+        except Exception as e:
+            with _queue_cache_lock:
+                _queue_cache.update(fail_time=time.time(), error=e)
+            if stale is not None:
+                return stale
+            raise
+        with _queue_cache_lock:
+            _queue_cache.update(time=time.time(), data=data, fail_time=0.0, error=None)
+        return data
+    finally:
+        _queue_fetch_lock.release()
+
+
+def queue_fetch_failing():
+    with _queue_cache_lock:
+        return time.time() - _queue_cache["fail_time"] < QUEUE_FAIL_BACKOFF
 
 
 def invalidate_queue_cache():
@@ -2200,8 +2247,9 @@ def job_queue_fields(job_id, job, device_id):
 def api_queue():
     device_id, is_new = get_device_id()
     try:
-        q = fetch_comfy_queue()
-        ok = True
+        # 조회가 늦거나 실패해도 화면 갱신(진행도, 이미지 목록 버전)은 늦추지 않도록 마지막 결과를 쓴다.
+        q = fetch_comfy_queue(allow_stale=True)
+        ok = not queue_fetch_failing()
     except Exception:
         q, ok = {}, False
     running_raw = [e for e in q.get("queue_running") or [] if len(e) > 1]
