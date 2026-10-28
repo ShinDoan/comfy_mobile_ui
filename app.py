@@ -1768,6 +1768,11 @@ def run_batch_job(job_id, data):
         with generation_jobs_lock:
             generation_jobs[job_id]["images"].append(item)
             generation_jobs[job_id]["completed"] = i + 1
+            if i + 1 == total:
+                # 마지막 장은 완료 상태까지 한 번에 바꾼다. 따로 바꾸면 그 사이에 진행 상태를 받은 화면이
+                # "아직 생성 중"으로 보고 방금 띄운 최종 이미지에 블러를 걸 수 있다.
+                generation_jobs[job_id]["status"] = "completed"
+                return
             if generation_jobs[job_id]["stop_requested"]:
                 generation_jobs[job_id]["status"] = "stopped"
                 return
@@ -1779,6 +1784,7 @@ def run_batch_job(job_id, data):
 HIRES_NODE_IDS = {"39", "40", "41", "42", "43", "47"}
 BASE_PREVIEW_NODE_ID = "17"
 MAX_WAIT_SECONDS = 2 * 60 * 60  # 큐에 다른 작업이 밀려 있어도 충분히 기다린다
+OWN_EVENT_QUIET_SECONDS = 10  # 내 작업 이벤트가 이 시간 동안 없을 때만 대기열/history 로 확인한다
 
 
 def open_progress_socket(client_id):
@@ -1863,6 +1869,7 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
     nodes_started = 0
     deadline = time.time() + MAX_WAIT_SECONDS
     last_history_check = 0.0
+    last_own_event = 0.0  # 이 작업에 대한 웹소켓 이벤트를 마지막으로 받은 시각
     missing_checks = 0  # history 에도 대기열에도 없는 상태가 연속으로 확인된 횟수
     if ws is not None:
         ws.settimeout(2.0)
@@ -1892,7 +1899,10 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
         else:
             time.sleep(1)
 
-        if isinstance(raw, str):  # 바이너리 메시지(미리보기 이미지)는 무시
+        if isinstance(raw, (bytes, bytearray)):
+            # 바이너리 메시지(미리보기 이미지)는 실행 중인 작업을 넣은 클라이언트에게만 오므로, 내 작업이 돌고 있다는 뜻이다.
+            last_own_event = time.time()
+        elif isinstance(raw, str):
             try:
                 event = json.loads(raw)
             except ValueError:
@@ -1901,6 +1911,8 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
             edata = event.get("data", {}) or {}
             pid = edata.get("prompt_id")
             mine = pid is None or pid == prompt_id  # 구버전 progress 이벤트는 prompt_id 가 없다
+            if pid == prompt_id or (etype == "progress" and mine):
+                last_own_event = time.time()
 
             if etype == "progress" and mine:
                 value, max_value = edata.get("value", 0), edata.get("max", 0)
@@ -1953,7 +1965,11 @@ def wait_for_prompt(job_id, prompt_id, ws, total_nodes, ws_outputs, want_preview
         # 웹소켓 이벤트를 놓쳤을 때를 대비한 확인. 아직 대기열(실행/대기)에 있으면 웹소켓이 완료를
         # 알려주므로 history 는 묻지 않는다 (ComfyUI 부담을 줄이기 위해). 대기열에서 빠졌을 때만
         # history 를 보고, history 에도 없으면 ComfyUI 화면 등에서 삭제된 것으로 본다.
+        # 이 작업의 이벤트가 최근에 들어왔다면(실행 중) 웹소켓이 살아 있는 것이므로 확인을 건너뛴다.
+        # 확인하는 동안(대기열 최대 5초, history 최대 20초)에는 이벤트를 읽지 못해 완료 감지가 그만큼 늦어진다.
         now = time.time()
+        if ws is not None and now - last_own_event < OWN_EVENT_QUIET_SECONDS:
+            continue
         if now - last_history_check >= (5 if ws is not None else 3):
             last_history_check = now
             ids = comfy_queue_prompt_ids()

@@ -4072,12 +4072,16 @@ function initGenerate(seedApi) {
       }
       wasFocused = focused;
 
+      // 이번에 새 이미지를 띄웠는지. 이 응답의 step/stage 는 방금 끝난 장의 값(100%, hires)이라
+      // 그대로 쓰면 막 띄운 이미지에 바로 최대 블러가 걸리므로, 이번 회차에는 블러를 건드리지 않는다.
+      let justRendered = false;
       if (completed > lastCompleted) {
         lastCompleted = completed;
         previewEpoch++;
         await loadGeneratedImages();
         previewShown = false;
         maxStepSeen = 0;
+        justRendered = true;
       }
 
       const finished = status.status === "completed" || status.status === "stopped" || status.status === "error";
@@ -4145,7 +4149,7 @@ function initGenerate(seedApi) {
             setResultBlur(previewImg, MAX_RESULT_BLUR * (1 - blurLevel(maxStepSeen) / 10));
           }
         }
-      } else if (focused && resultBlurEffectEnabled && !finished) {
+      } else if (focused && resultBlurEffectEnabled && !finished && !justRendered) {
         // hires 가 아닌 일반 생성 중에는, 아직 화면에 남아있는 이전 이미지 위에
         // 진행률이 올라갈수록 블러를 점점 강하게 걸어서 "새 이미지가 만들어지고
         // 있다"는 느낌을 준다. 최종 블러 강도는 hires 시작 블러와 동일한 MAX_RESULT_BLUR.
@@ -4164,6 +4168,8 @@ function initGenerate(seedApi) {
 
       const showFinal = focused || watchers.size === 1;
       if (status.status === "completed") {
+        // 최종 이미지에 생성 중 블러가 남지 않게 한다.
+        if (focused) resultImage.querySelectorAll("img").forEach((im) => setResultBlur(im, 0));
         if (showFinal) resultStatus.textContent = `${total} / ${total} 생성 완료`;
         return;
       }
