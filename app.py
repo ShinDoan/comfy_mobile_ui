@@ -1,5 +1,5 @@
 """ComfyUI Mobile UI - Flask 백엔드 (실제 ComfyUI 연동)"""
-import base64, hashlib, io, json, os, socket, threading, time, urllib.error, urllib.parse, urllib.request, uuid
+import base64, hashlib, http.client, io, json, os, socket, threading, time, urllib.error, urllib.parse, urllib.request, uuid
 from datetime import datetime, timezone
 import yaml
 import websocket
@@ -182,8 +182,7 @@ def save_state():
 
 def _fetch_node_options_once(node_type, input_name):
     try:
-        with urllib.request.urlopen(f"{COMFY_URL}/object_info/{urllib.parse.quote(node_type)}", timeout=10) as r:
-            data = json.loads(r.read())
+        data = json.loads(comfy_fetch(f"{COMFY_URL}/object_info/{urllib.parse.quote(node_type)}", timeout=10))
 
         info = data.get(node_type, {})
         if not info:
@@ -997,8 +996,7 @@ def api_debug_object_info(node_type):
     """ComfyUI가 특정 노드에 대해 실제로 어떤 응답을 주는지 그대로 확인하기 위한 디버그용 라우트.
     브라우저에서 http://127.0.0.1:7860/api/debug/object-info/UpscaleModelLoader 로 열어보면 됩니다."""
     try:
-        with urllib.request.urlopen(f"{COMFY_URL}/object_info/{urllib.parse.quote(node_type)}", timeout=10) as r:
-            return jsonify(json.loads(r.read()))
+        return jsonify(json.loads(comfy_fetch(f"{COMFY_URL}/object_info/{urllib.parse.quote(node_type)}", timeout=10)))
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
@@ -1377,16 +1375,37 @@ class ComfyError(RuntimeError):
     """ComfyUI 와의 통신/실행 중 발생한 오류 (사용자에게 그대로 보여줄 수 있는 메시지)."""
 
 
+def comfy_fetch(url, data=None, headers=None, method=None, timeout=15):
+    """ComfyUI 에 HTTP 요청을 보내고 응답 본문(bytes)을 돌려준다. 4xx/5xx 면 urllib.error.HTTPError 를 던진다.
+
+    urllib.request.urlopen 을 쓰지 않는 이유: urllib 은 모든 요청에 'Connection: close' 를 붙이는데,
+    Windows 의 ComfyUI(aiohttp 3.14, sendfile 사용)는 이 헤더가 있으면 파일 응답을 다 보내기 전에 연결을
+    닫아 버린다. 그래서 /view 이미지가 중간에 끊기거나(WinError 10054) 남은 데이터가 오지 않아 시간 초과가
+    났다 (측정: urllib /view 10번 중 4번 실패, Connection: close 를 붙인 curl 10번 중 7번 실패,
+    http.client 는 50번 모두 성공). http.client 는 이 헤더를 보내지 않는다."""
+    parts = urllib.parse.urlsplit(url)
+    conn_cls = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+    conn = conn_cls(parts.hostname, parts.port, timeout=timeout)
+    path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+    try:
+        conn.request(method or ("POST" if data is not None else "GET"), path, body=data, headers=headers or {})
+        resp = conn.getresponse()
+        body = resp.read()
+        if resp.status >= 400:
+            raise urllib.error.HTTPError(url, resp.status, resp.reason, resp.headers, io.BytesIO(body))
+        return body
+    finally:
+        conn.close()
+
+
 def comfy_request_json(url, payload=None, timeout=15):
     """ComfyUI 에 JSON 요청을 보내고 JSON 응답을 돌려준다.
     HTTP 오류(400 등)가 나면 ComfyUI 가 돌려준 본문(node_errors 등)을 메시지에 담아 던진다.
     (예전에는 'HTTP Error 400' 만 보여서 원인을 알 수 없었다.)"""
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"Content-Type": "application/json"} if data is not None else {}
-    req = urllib.request.Request(url, data=data, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read())
+        return json.loads(comfy_fetch(url, data=data, headers=headers, timeout=timeout))
     except urllib.error.HTTPError as e:
         try:
             body = e.read().decode("utf-8", "replace")[:1500]
@@ -1406,8 +1425,7 @@ def fetch_view_bytes(image_info, retries=5):
     last_err = None
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(f"{COMFY_URL}/view?{q}", timeout=30) as r:
-                body = r.read()
+            body = comfy_fetch(f"{COMFY_URL}/view?{q}", timeout=30)
             if body:
                 return body
             last_err = "빈 응답"
@@ -1639,8 +1657,7 @@ def interrupt_comfyui(prompt_id=None):
     try:
         body = json.dumps({"prompt_id": prompt_id}).encode("utf-8") if prompt_id else b""
         headers = {"Content-Type": "application/json"} if prompt_id else {}
-        req = urllib.request.Request(f"{COMFY_URL}/interrupt", data=body, headers=headers, method="POST")
-        urllib.request.urlopen(req, timeout=5)
+        comfy_fetch(f"{COMFY_URL}/interrupt", data=body, headers=headers, method="POST", timeout=5)
     except Exception as e:
         print(f"[WARN] ComfyUI 중단 요청 실패: {e}")
 
@@ -1658,13 +1675,8 @@ def upload_image_to_comfyui(img_bytes, filename):
         f'--{boundary}--\r\n'.encode("utf-8"),
     ]
     body = b"".join(parts)
-    req = urllib.request.Request(
-        f"{COMFY_URL}/upload/image",
-        data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-    )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        result = json.loads(r.read())
+    result = json.loads(comfy_fetch(f"{COMFY_URL}/upload/image", data=body,
+                                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, timeout=30))
     return result.get("name") or filename
 
 
@@ -2173,10 +2185,9 @@ def comfy_queue_prompt_ids(max_age=QUEUE_CACHE_SECONDS):
 
 def comfy_post_queue(payload):
     """ComfyUI /queue 에 삭제/비우기 요청을 보낸다 (응답 본문이 비어 있어서 JSON 으로 읽지 않는다)."""
-    req = urllib.request.Request(f"{COMFY_URL}/queue", data=json.dumps(payload).encode("utf-8"),
-                                 headers={"Content-Type": "application/json"}, method="POST")
     try:
-        urllib.request.urlopen(req, timeout=5).close()
+        comfy_fetch(f"{COMFY_URL}/queue", data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}, method="POST", timeout=5)
     finally:
         invalidate_queue_cache()
 

@@ -3188,20 +3188,11 @@ function renderCurrentImage(item, animate) {
     resultImage.style.aspectRatio = `${item.settings.width} / ${item.settings.height}`;
   }
 
-  // 작은 썸네일을 먼저 띄우고, 원본 PNG 를 다 받으면 바꿔 끼운다 (원본은 수 MB 라 휴대폰에서 한참 걸린다).
+  // 큰 이미지는 원본 PNG 를 바로 띄운다 (저화질 썸네일을 먼저 보여주지 않는다. 썸네일은 아래 목록에만 쓴다).
   const img = document.createElement("img");
   img.alt = "생성된 이미지";
   img.decoding = "async";
-  if (item.thumb_url) {
-    img.src = item.thumb_url;
-    const full = new Image();
-    full.onload = () => {
-      if (img.isConnected && currentHiresUrl === item.url && !viewingPreHires) img.src = full.src;
-    };
-    full.src = item.url;
-  } else {
-    img.src = item.url;
-  }
+  img.src = item.url;
   resultImage.appendChild(img);
   resultStatus.textContent = `생성 완료 · ${item.created_at || ""}`;
 
